@@ -13,7 +13,7 @@ async function main(): Promise<void> {
   const config = loadConfig(configPath(process.argv.slice(2)));
   const gateway = new Gateway({ config, log: (m) => console.error(`seat-gateway: ${m}`) });
   const addr = await gateway.start();
-  console.error(`seat-gateway: listening on http://${addr.host.includes(":") ? `[${addr.host}]` : addr.host}:${addr.port} (read-only)`);
+  console.error(`seat-gateway: listening on http://${addr.host.includes(":") ? `[${addr.host}]` : addr.host}:${addr.port} (${config.act.send ? "send enabled" : "read-only"})`);
   const stop = () => void gateway.stop().finally(() => process.exit(0));
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);

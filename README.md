@@ -25,16 +25,16 @@ can move into OpenRig later with a scope rename (OpenRig packages use the `@open
 | `packages/seat-source-openrig` | The only code that knows daemon routes (GET only). Fills the `x-openrig` extension (seat detail and the `x-openrig.event` kind, see `seat-protocol`). Snapshots (`/api/ps`, `/api/rigs/:id/nodes`, `/api/attention`, `/api/queue/list`) plus the `/api/events` stream become `host`, `rig`, `seat`, `attention` and `work` upserts and deletes; resumes from the daemon's event sequence, and does a full resync on a gap or a restarted log. |
 | `packages/seat-gateway` | Read-only Hono server: `GET /capabilities`, `GET /stream`, `GET /snapshot`. See below. |
 
-Planned: `seat-ui` and `POST /act`.
+Planned: `seat-ui`.
 
-## Seat gateway (read-only)
+## Seat gateway (read-only by default)
 
 `packages/seat-gateway` serves the protocol from an OpenRig daemon so that clients stop polling it.
 It runs server-side because OpenRig refuses a foreign browser `Origin`; the gateway does the same.
 
 | Route | Content |
 |---|---|
-| `GET /capabilities` | Protocol version, served kinds (including `x-openrig.event`), extensions (`x-openrig`) with `extensionVersions`, harnesses seen, features. Each daemon route is probed (a 404 turns that feature and its kind off) and the answer is reused for 30 s. `features.act` is `false`: there is no `/act` in this version. |
+| `GET /capabilities` | Protocol version, served kinds (including `x-openrig.event`), extensions (`x-openrig`) with `extensionVersions`, harnesses seen, features. Each daemon route is probed (a 404 turns that feature and its kind off) and the answer is reused for 30 s. `features.act` is `false` and there is no `actions` list unless the operator enables `act.send` (see below). |
 | `GET /stream` | SSE of the stream envelope `{cursor, kind, id, op, data}`; the SSE `id` is the cursor. Resume with `Last-Event-ID` (or `?cursor=`). |
 | `GET /snapshot/:kind`, `GET /snapshot?kind=` | Current items of one kind plus the cursor they are consistent with; without a kind, all served kinds. |
 
@@ -56,6 +56,12 @@ route cannot be paged: a full page marks `work` incomplete (the host reports it)
 down the host is `offline` and cached items stay readable. The gateway only issues GET requests to the
 daemon, always with a bounded `replay` (default 2000, `replay=0` plus `Last-Event-ID` when resuming; the daemon's log is unbounded), never writes tmux and
 never opens the daemon's database. Request bodies of queue items are not copied into the protocol.
+
+**`send` action (off by default).** With `act.send: true` the gateway declares `{id: "send", input: {text, maxLength}, danger: false}` on every `seat`, lists it in `/capabilities` (`features.act: true`, `actions`) and serves `POST /act` (same bearer as every route). It calls the daemon's `POST /api/transport/send` and nothing else; the config needs `act.sender` (a registered non-seat address such as `cockpit@<rig>`, sent as `x-openrig-session`, which the daemon treats as an unverified claim; a seat name is refused) and `act.idempotencyFile`. Never sent: `x-openrig-occupant-generation`, `force` or any override. The daemon token (`daemonTokenFile`, 0600) goes only to the literal loopback IP, with no redirects.
+- At most one send per `idempotencyKey`: the gateway's own table (a 0600 file, written before the daemon is called, holding a hash of the request and never the text) returns the stored response with `replayed: true`. A new key for the same text is a new send; the same key for a different request is refused. OpenRig's `deliveryId` is not relied on (it does not de-duplicate in draft-aware mode). A send in flight when the gateway stopped comes back as `failed`. Keys are kept for `act.retentionDays` (default 7) whatever the count; a table full of unexpired keys (`act.maxKeys`) answers 503 instead of evicting. The entry is fsynced (file, rename, directory) before the daemon is called, and if that fails nothing is sent. One gateway per table file: `<file>.lock` makes a second process refuse to start.
+- Refused before anything is sent: unknown seat, a seat that is `needs-input`, `blocked`, `stopped`, `unknown` or held, text over `act.maxLength` (default 4000).
+- Outcomes: `delivered` and `rendered-unconfirmed` are `completed`; `retained` is `accepted` (the daemon holds it; do not resend); a refusal with `inputPhase: not_reached` is `rejected` with the daemon's reason code; anything else (`attempted`, `written`, no answer, an unexpected status) is `failed`. The gateway never retries on its own; a person decides and uses a new key. Daemon free text is not copied into the response.
+- Sends to one seat are serialized.
 
 **`x-openrig` text and replay.** With `xOpenrig.includeText` off no daemon free text reaches any field, core or extension: work titles read `Queue item <id>`, attention titles `Request for a person: <id>` (or `Update ...`) with no impact. `xOpenrig.includeText: true` adds the daemon's free text (error text, prompt reason or
 summary, hold reason, event summaries, work title, attention title and impact). It is **sensitive**: the daemon may put message content or

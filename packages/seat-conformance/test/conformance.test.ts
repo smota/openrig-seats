@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   REQUIRED_EVENT_FIELDS,
+  REQUIRED_INPUT_PHASES,
+  REQUIRED_SEND_REQUEST_FIELDS,
+  REQUIRED_SEND_RESULT_FIELDS,
+  extractSendRequestFields,
+  extractSendResult,
   REQUIRED_MOUNTS,
   REQUIRED_NODE_FIELDS,
   REQUIRED_ROUTES,
@@ -47,6 +52,9 @@ describe("snapshot file", () => {
     }
     for (const t of REQUIRED_TOKENS) expect(s.tokens[t.file]).toContain(t.token);
     expect(s.transport.outcomes).toEqual(["delivered", "failed", "rendered-unconfirmed", "retained"]);
+    expect(s.transport.sendRequestFields).toEqual([...REQUIRED_SEND_REQUEST_FIELDS].sort());
+    expect(s.transport.sendResultFields).toEqual([...REQUIRED_SEND_RESULT_FIELDS].sort());
+    expect(s.transport.inputPhases).toEqual([...REQUIRED_INPUT_PHASES].sort());
     expect(s.transport.failureStatus.session_missing).toBe(404);
     expect(s.transport.failureStatus.tmux_unavailable).toBe(503);
     for (const v of ["agent.activity", "rig.created", "seat.model_divergence"]) expect(s.rigEventTypes).toContain(v);
@@ -127,6 +135,18 @@ describe("removal detection", () => {
     ]);
   });
 
+  it("reports a removed send request field, result field and input phase", () => {
+    const cur = structuredClone(base);
+    cur.transport.sendRequestFields = cur.transport.sendRequestFields.filter((f) => f !== "deliveryId");
+    cur.transport.sendResultFields = cur.transport.sendResultFields.filter((f) => f !== "inputPhase");
+    cur.transport.inputPhases = cur.transport.inputPhases.filter((f) => f !== "not_reached");
+    expect(diffRemovals(snapshot, cur)).toEqual([
+      "transport send request field removed: deliveryId",
+      "transport send result field removed: inputPhase",
+      "transport input phase removed: not_reached",
+    ]);
+  });
+
   it("allows additions", () => {
     const cur = structuredClone(base);
     cur.rigEventTypes.push("new.event");
@@ -169,6 +189,13 @@ describe("extractors", () => {
   it("reads a status map", () => {
     expect(extractStatusMap(`const statusMap: Record<string, number> = {\n a_b: 409,\n c: 404,\n};`)).toEqual({ a_b: 409, c: 404 });
   });
+  it("reads the send request body type and the SendResult members, ignoring comments", () => {
+    const req = `const f = async (c) => { const body = await c.req.json<{ session?: string; deliveryId?: string; /* verify?: boolean */ text: string; extra?: 1 }>(); };`;
+    expect(extractSendRequestFields(req)).toEqual(["deliveryId", "session", "text"]);
+    const res = `export interface SendResult { ok: boolean; sessionName: string; // reason?: string
+      inputPhase?: "not_reached" | "attempted" | "written"; sent?: boolean; }`;
+    expect(extractSendResult(res)).toEqual({ fields: ["inputPhase", "ok", "sent", "sessionName"], inputPhases: ["attempted", "not_reached", "written"] });
+  });
   it("reads an outcome union", () => {
     expect(extractOutcomes(`interface R { outcome?: "delivered" | "y-z"; }`)).toEqual(["delivered", "y-z"]);
   });
@@ -180,6 +207,22 @@ describe("extractors", () => {
 
 // Mutations of the real OpenRig sources, in memory: each must be reported as a removal.
 describe.skipIf(!available)("mutations of the checkout sources are detected", () => {
+  it("renaming deliveryId in the send body type or dropping an inputPhase value is detected", () => {
+    const t = "packages/daemon/src/routes/transport.ts";
+    const sendReader = (rel: string) => {
+      const text = readFileSync(resolve(root, rel), "utf8");
+      return rel === t ? text.replace("deliveryId?: string;", "deliveryKey?: string;") : text;
+    };
+    // the body type no longer declares deliveryId, so it cannot be found at all
+    expect(() => extractSurfaces(root, sendReader)).toThrow(/send request body type not found/);
+    const s = "packages/daemon/src/domain/session-transport.ts";
+    const reader = (rel: string) => {
+      const text = readFileSync(resolve(root, rel), "utf8");
+      return rel === s ? text.replace('inputPhase?: "not_reached" | "attempted" | "written";', 'inputPhase?: "attempted" | "written";') : text;
+    };
+    expect(diffRemovals(snapshot, extractSurfaces(root, reader))).toContain("transport input phase removed: not_reached");
+  });
+
   const mutate = (file: string, from: string | RegExp, to: string) => {
     const reader = (rel: string) => {
       const text = readFileSync(resolve(root, rel), "utf8");

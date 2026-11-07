@@ -443,6 +443,17 @@ extensionVersions?: {
 }
 harnesses: string[]
 /**
+ * Actions the server performs through POST /act, by the kind of item they are declared on. Present only when features.act is true. Optional.
+ */
+actions?: {
+/**
+ * Kind of item the action is declared on.
+ */
+kind: string
+action: Action
+[k: string]: unknown
+}[]
+/**
  * Optional features, for example terminal.
  */
 features: {

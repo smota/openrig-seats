@@ -14,6 +14,8 @@ export interface AppOptions {
   enabledKinds: () => string[];
   allowedOrigins?: string[];
   allowedHosts?: string[];
+  /** Present only when the write side is enabled: serves POST /act. */
+  act?: (body: unknown) => Promise<{ httpStatus: number; response: unknown }>;
   /** SSE comment interval. Default 15000. */
   heartbeatMs?: number;
   /** A client that accepts no bytes for this long is dropped. Default 30000. */
@@ -24,7 +26,7 @@ export interface AppOptions {
 const digest = (s: string) => createHash("sha256").update(s).digest();
 const LOOPBACK_HOST = /^(127(\.\d{1,3}){3}|localhost|\[::1\])(:\d+)?$/i;
 
-/** Builds the HTTP surface. Read-only: GET only, no /act. */
+/** Builds the HTTP surface. GET only, plus POST /act when `act` is provided. */
 export function createApp(opts: AppOptions): Hono {
   const app = new Hono();
   const expected = digest(opts.token);
@@ -55,9 +57,27 @@ export function createApp(opts: AppOptions): Hono {
   });
 
   app.use("*", async (c, next) => {
+    if (c.req.method === "POST" && opts.act && c.req.path === "/act") return next();
     if (c.req.method !== "GET") return c.json({ error: "method_not_allowed", message: "this gateway is read-only" }, 405, { allow: "GET" });
     await next();
   });
+
+  if (opts.act) {
+    const act = opts.act;
+    app.post("/act", async (c) => {
+      if (!/^application\/json\b/i.test(c.req.header("content-type") ?? "")) return c.json({ error: "invalid_request", message: "content-type must be application/json" }, 415);
+      const len = Number(c.req.header("content-length") ?? 0);
+      if (len > 256 * 1024) return c.json({ error: "invalid_request", message: "body too large" }, 413);
+      let body: unknown;
+      try {
+        body = JSON.parse(await c.req.text());
+      } catch {
+        return c.json({ error: "invalid_request", message: "body is not JSON" }, 400);
+      }
+      const r = await act(body);
+      return c.json(r.response, r.httpStatus as 200);
+    });
+  }
 
   app.get("/capabilities", async (c) => c.json(await opts.capabilities()));
 

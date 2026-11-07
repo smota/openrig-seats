@@ -14,6 +14,18 @@
     "extensions": { "type": "array", "items": { "type": "string", "pattern": "^x-[a-z0-9][a-z0-9-]*$" }, "description": "Extension namespaces in use." },
     "extensionVersions": { "type": "object", "propertyNames": { "pattern": "^x-[a-z0-9][a-z0-9-]*$" }, "additionalProperties": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" }, "description": "Version (major.minor) of each extension namespace in use, for example {\"x-openrig\": \"1.0\"}. Optional." },
     "harnesses": { "type": "array", "items": { "type": "string" } },
+    "actions": {
+      "type": "array",
+      "description": "Actions the server performs through POST /act, by the kind of item they are declared on. Present only when features.act is true. Optional.",
+      "items": {
+        "type": "object",
+        "required": ["kind", "action"],
+        "properties": {
+          "kind": { "type": "string", "description": "Kind of item the action is declared on." },
+          "action": { "$ref": "common.v1.schema.json#/$defs/action" }
+        }
+      }
+    },
     "features": { "type": "object", "additionalProperties": { "type": "boolean" }, "description": "Optional features, for example terminal." }
   }
 }

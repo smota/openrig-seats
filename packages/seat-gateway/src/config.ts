@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { assertLoopbackUrl } from "@openrig-seats/seat-source-openrig";
+import { DEFAULT_SEND_MAX_LENGTH, type ActConfig } from "./act.js";
 
 export interface GatewayConfig {
   /** Literal loopback URL of the OpenRig daemon. */
@@ -19,6 +20,8 @@ export interface GatewayConfig {
   hostId: string;
   hostName: string;
   tombstoneLimit: number;
+  /** Write side. Off by default: with `act.send` unset the gateway is read-only. */
+  act: ActConfig;
   /** The `x-openrig` extension. */
   xOpenrig: {
     /** Carry the daemon's free text (error text, prompt reason or summary, hold reason, event summaries). Off by default: sensitive. */
@@ -62,8 +65,31 @@ export function parseConfig(raw: unknown): GatewayConfig {
   if (x.includeText !== undefined && typeof x.includeText !== "boolean") throw new Error("config.xOpenrig.includeText must be a boolean");
   const replay = x.replay === undefined ? 2000 : x.replay;
   if (typeof replay !== "number" || !Number.isInteger(replay) || replay < 0 || replay > 100_000) throw new Error("config.xOpenrig.replay must be an integer 0-100000");
+  const a = (r.act ?? {}) as Record<string, unknown>;
+  if (typeof a !== "object" || a === null || Array.isArray(a)) throw new Error("config.act must be an object");
+  if (a.send !== undefined && typeof a.send !== "boolean") throw new Error("config.act.send must be a boolean");
+  const send = a.send === true;
+  const maxLength = a.maxLength === undefined ? DEFAULT_SEND_MAX_LENGTH : a.maxLength;
+  if (typeof maxLength !== "number" || !Number.isInteger(maxLength) || maxLength < 1 || maxLength > 20_000) throw new Error("config.act.maxLength must be an integer 1-20000");
+  const maxKeys = a.maxKeys === undefined ? 5000 : a.maxKeys;
+  if (typeof maxKeys !== "number" || !Number.isInteger(maxKeys) || maxKeys < 1 || maxKeys > 1_000_000) throw new Error("config.act.maxKeys must be an integer 1-1000000");
+  const retentionDays = a.retentionDays === undefined ? 7 : a.retentionDays;
+  if (typeof retentionDays !== "number" || !Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) throw new Error("config.act.retentionDays must be an integer 1-3650");
+  if (a.sender !== undefined && (typeof a.sender !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/.test(a.sender))) throw new Error("config.act.sender must look like name@rig");
+  if (a.idempotencyFile !== undefined && (typeof a.idempotencyFile !== "string" || a.idempotencyFile === "")) throw new Error("config.act.idempotencyFile must be a non-empty string");
+  if (send && a.sender === undefined) throw new Error("config.act.sender is required when act.send is true (a registered non-seat address such as cockpit@<rig>)");
+  if (send && a.idempotencyFile === undefined) throw new Error("config.act.idempotencyFile is required when act.send is true");
+  const act: ActConfig = {
+    send,
+    ...(typeof a.sender === "string" ? { sender: a.sender } : {}),
+    maxLength,
+    ...(typeof a.idempotencyFile === "string" ? { idempotencyFile: expandHome(a.idempotencyFile) } : {}),
+    maxKeys,
+    retentionDays,
+  };
   return {
     daemonUrl,
+    act,
     ...(typeof r.daemonTokenFile === "string" ? { daemonTokenFile: expandHome(r.daemonTokenFile) } : {}),
     tokenFile: expandHome(str("tokenFile")),
     listen: { host, port },

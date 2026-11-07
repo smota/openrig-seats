@@ -137,7 +137,7 @@ export function mapSeatExtension(n: Json, includeText = false): Json {
   return out;
 }
 
-export function mapSeat(node: unknown, attentionIds: string[], includeText = false): Json | null {
+export function mapSeat(node: unknown, attentionIds: string[], includeText = false, actions: Json[] = []): Json | null {
   const n = rec(node);
   if (n.nodeKind === "infrastructure") return null;
   const id = str(n.nodeId);
@@ -158,6 +158,7 @@ export function mapSeat(node: unknown, attentionIds: string[], includeText = fal
     ...(activity ? { activity: activity.slice(0, 200) } : {}),
     ...(generationId ? { generationId } : {}),
     ...(attentionIds.length ? { attentionIds } : {}),
+    ...(actions.length ? { actions } : {}),
     "x-openrig": mapSeatExtension(n, includeText),
   };
 }

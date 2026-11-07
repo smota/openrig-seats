@@ -7,6 +7,12 @@ import { fileURLToPath } from "node:url";
 const dir = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const fixture = (name: string) => JSON.parse(readFileSync(join(dir, name), "utf8"));
 
+export interface RecordedPost {
+  path: string;
+  headers: Record<string, string | string[] | undefined>;
+  body: Record<string, unknown>;
+}
+
 export interface RecordedRequest {
   method: string;
   path: string;
@@ -30,6 +36,13 @@ export class MockDaemon {
   ]);
   attention: Record<string, unknown> = fixture("attention.json");
   queue: Array<Record<string, unknown>> = fixture("queue.json");
+  /** POST /api/transport/send requests received, with every header. */
+  readonly posts: RecordedPost[] = [];
+  /** Answer to a send; default is a verified delivery. May be async (to hold a send open). */
+  sendReply: (body: Record<string, unknown>) => { status: number; body: unknown } | { redirect: string } | Promise<{ status: number; body: unknown }> = (b) => ({
+    status: 200,
+    body: { ok: true, sessionName: b.session, outcome: "delivered", verified: true, sent: true },
+  });
   /** Path prefixes answered with 404. */
   missing = new Set<string>();
   /** Path prefixes answered with 500. */
@@ -112,6 +125,21 @@ export class MockDaemon {
       res.end(JSON.stringify(body));
     };
     if (req.headers.origin) return json(403, { error: "foreign origin" });
+    if (req.method === "POST" && url.pathname === "/api/transport/send") {
+      let raw = "";
+      req.on("data", (d) => (raw += d));
+      req.on("end", () => {
+        const body = JSON.parse(raw) as Record<string, unknown>;
+        this.posts.push({ path: url.pathname, headers: { ...req.headers }, body });
+        void Promise.resolve(this.sendReply(body)).then((r) => {
+          if ("redirect" in r) {
+            res.writeHead(302, { location: r.redirect });
+            res.end();
+          } else json(r.status, r.body);
+        });
+      });
+      return;
+    }
     if (req.method !== "GET") return json(405, { error: "read only mock" });
     const p = url.pathname;
     for (const m of this.missing) if (p.startsWith(m)) return json(404, { error: "not found" });

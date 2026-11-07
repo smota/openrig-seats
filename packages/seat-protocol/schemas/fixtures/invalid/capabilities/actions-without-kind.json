@@ -1,0 +1,8 @@
+{
+  "protocol": { "version": "1.0" },
+  "kinds": ["seat"],
+  "extensions": [],
+  "harnesses": [],
+  "actions": [{ "action": { "id": "send", "label": "Send" } }],
+  "features": { "act": true }
+}

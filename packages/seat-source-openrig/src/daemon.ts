@@ -91,6 +91,28 @@ export class DaemonClient {
     }
   }
 
+  /**
+   * POST JSON and return the status and parsed body (undefined when not JSON) without throwing on a non-2xx answer.
+   * Throws only when no answer was read (network error, timeout, redirect): the request may or may not have been
+   * acted on, so a caller that wrote something must treat that as indeterminate. Redirects are never followed.
+   */
+  async postJson(path: string, body: unknown, headers: Record<string, string> = {}, timeoutMs?: number): Promise<{ status: number; body: unknown }> {
+    const res = await this.f(this.base + path, {
+      method: "POST",
+      redirect: "error",
+      headers: this.headers({ accept: "application/json", "content-type": "application/json", ...headers }),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
+    });
+    let parsed: unknown;
+    try {
+      parsed = await res.json();
+    } catch {
+      parsed = undefined;
+    }
+    return { status: res.status, body: parsed };
+  }
+
   /** Status of a GET without parsing: used by feature probes. */
   async status(path: string, signal?: AbortSignal): Promise<number> {
     const timeout = AbortSignal.timeout(this.timeoutMs);

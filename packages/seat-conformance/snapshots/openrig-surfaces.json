@@ -97,7 +97,8 @@
         "router POST /capture",
         "router POST /send",
         "router POST /send-expected"
-      ]
+      ],
+      "senderIdentity": []
     },
     "tokens": {
       "events": [
@@ -114,6 +115,9 @@
       "queue": [],
       "transport": [
         "deliveryId"
+      ],
+      "senderIdentity": [
+        "x-openrig-session"
       ]
     },
     "transport": {
@@ -162,7 +166,27 @@
         "transport_unavailable": 409,
         "typing_guard_enabled": 409,
         "wait_for_idle_timeout": 409
-      }
+      },
+      "sendRequestFields": [
+        "deliveryId",
+        "session",
+        "text",
+        "verify"
+      ],
+      "sendResultFields": [
+        "inputPhase",
+        "ok",
+        "outcome",
+        "reason",
+        "sent",
+        "sessionName",
+        "verified"
+      ],
+      "inputPhases": [
+        "attempted",
+        "not_reached",
+        "written"
+      ]
     },
     "rigEventTypes": [
       "agent.activity",
@@ -460,6 +484,11 @@
         "file": "transport",
         "token": "deliveryId",
         "why": "send idempotency key"
+      },
+      {
+        "file": "senderIdentity",
+        "token": "x-openrig-session",
+        "why": "sender header of transport/send (an unverified claim: the gateway sends a fixed principal)"
       }
     ]
   }

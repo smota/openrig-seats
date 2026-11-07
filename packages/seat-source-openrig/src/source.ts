@@ -18,6 +18,8 @@ export interface SourceOptions {
    * `x-openrig` extension. Off by default: that text may hold message content or credentials.
    */
   includeText?: boolean;
+  /** Declared actions attached to every seat item (the gateway passes its enabled actions). */
+  seatActions?: Array<Record<string, unknown>>;
   /** Events asked for on a cold start (newest N of ALL daemon event types, not only the mapped ones). Default 2000. */
   eventReplay?: number;
   reconnectMinMs?: number;
@@ -563,7 +565,7 @@ export class OpenRigSource {
     }
     for (const n of nodes) {
       const id = typeof n.nodeId === "string" ? n.nodeId : "";
-      const seat = mapSeat(n, attentionBySeat.get(id) ?? [], this.opts.includeText === true);
+      const seat = mapSeat(n, attentionBySeat.get(id) ?? [], this.opts.includeText === true, this.opts.seatActions ?? []);
       if (seat) put("seat", { ...seat, ...(isoOrUndefined(n.lastActivityAt) ? { __at: isoOrUndefined(n.lastActivityAt) } : {}) });
     }
     for (const a of attention) put("attention", a);

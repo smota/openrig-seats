@@ -1,0 +1,18 @@
+{
+  "protocol": { "version": "1.0" },
+  "kinds": ["host", "rig", "seat"],
+  "extensions": [],
+  "harnesses": ["claude-code"],
+  "actions": [
+    {
+      "kind": "seat",
+      "action": {
+        "id": "send",
+        "label": "Send text to this seat",
+        "input": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string", "maxLength": 4000 } } },
+        "danger": false
+      }
+    }
+  ],
+  "features": { "act": true }
+}

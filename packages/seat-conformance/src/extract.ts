@@ -13,6 +13,7 @@ const ROUTE_FILES = {
   sessions: `${SRC}/routes/sessions.ts`,
   queue: `${SRC}/routes/queue.ts`,
   transport: `${SRC}/routes/transport.ts`,
+  senderIdentity: `${SRC}/routes/require-sender-identity.ts`,
 } as const;
 
 /**
@@ -53,7 +54,17 @@ export const REQUIRED_TOKENS: ReadonlyArray<{ file: keyof typeof ROUTE_FILES; to
   { file: "events", token: "rigId", why: "rig-scoped stream" },
   { file: "sessions", token: "sinceBytes", why: "generation-record byte cursor" },
   { file: "transport", token: "deliveryId", why: "send idempotency key" },
+  { file: "senderIdentity", token: "x-openrig-session", why: "sender header of transport/send (an unverified claim: the gateway sends a fixed principal)" },
 ];
+
+/** Fields of the `POST /api/transport/send` body the gateway's send action sends. */
+export const REQUIRED_SEND_REQUEST_FIELDS: readonly string[] = ["session", "text", "deliveryId", "verify"];
+
+/** Members of the send result (`SendResult`) the gateway reads to map an outcome to an act response. */
+export const REQUIRED_SEND_RESULT_FIELDS: readonly string[] = ["ok", "sessionName", "outcome", "reason", "sent", "inputPhase", "verified"];
+
+/** `inputPhase` values: only `not_reached` establishes that nothing was typed. */
+export const REQUIRED_INPUT_PHASES: readonly string[] = ["attempted", "not_reached", "written"];
 
 /**
  * Daemon node fields (`NodeInventoryEntry` in domain/types.ts, served by /api/rigs/:id/nodes) that the
@@ -96,6 +107,12 @@ export interface OpenRigSurfaces {
     outcomes: string[];
     /** Failure reason to HTTP status, from the `statusMap` in routes/transport.ts. */
     failureStatus: Record<string, number>;
+    /** Required members of the `POST /send` request body type (see REQUIRED_SEND_REQUEST_FIELDS), sorted. */
+    sendRequestFields: string[];
+    /** Required members of `SendResult` (see REQUIRED_SEND_RESULT_FIELDS), sorted. */
+    sendResultFields: string[];
+    /** `inputPhase?:` union of `SendResult`, sorted. */
+    inputPhases: string[];
   };
   /** `RigEvent` discriminant names (`type: "..."`), sorted. */
   rigEventTypes: string[];
@@ -199,6 +216,35 @@ export function extractOutcomes(sessionTransportSource: string): string[] {
   return sorted(names);
 }
 
+/** Members of the body type of `c.req.json<{...}>()` in the send handler (the literal that declares `deliveryId`), filtered to the required ones. */
+export function extractSendRequestFields(transportSource: string): string[] {
+  let names: string[] | null = null;
+  walk(parse(transportSource), (n) => {
+    if (names || !ts.isCallExpression(n) || !n.typeArguments?.length) return;
+    const t = n.typeArguments[0]!;
+    if (!ts.isTypeLiteralNode(t)) return;
+    const members = memberNames(t.members);
+    if (members.includes("deliveryId")) names = members;
+  });
+  if (!names) throw new Error("transport.ts: send request body type not found");
+  return sorted(REQUIRED_SEND_REQUEST_FIELDS.filter((f) => (names as string[]).includes(f)));
+}
+
+/** Required members of the `SendResult` interface and the values of its `inputPhase` union. */
+export function extractSendResult(sessionTransportSource: string): { fields: string[]; inputPhases: string[] } {
+  let out: { fields: string[]; inputPhases: string[] } | null = null;
+  walk(parse(sessionTransportSource), (n) => {
+    if (out || !ts.isInterfaceDeclaration(n) || n.name.text !== "SendResult") return;
+    const phase = n.members.find((m): m is ts.PropertySignature => ts.isPropertySignature(m) && ts.isIdentifier(m.name) && m.name.text === "inputPhase");
+    out = {
+      fields: sorted(REQUIRED_SEND_RESULT_FIELDS.filter((f) => memberNames(n.members).includes(f))),
+      inputPhases: phase?.type ? sorted(literalNames(phase.type)) : [],
+    };
+  });
+  if (!out) throw new Error("session-transport.ts: SendResult interface not found");
+  return out;
+}
+
 export function extractRigEventTypes(typesSource: string): string[] {
   const names: string[] = [];
   walk(parse(typesSource), (n) => {
@@ -282,6 +328,7 @@ export function extractSurfaces(root: string, read: ReadSource = (rel) => readFi
     routes[key] = extractRoutes(source);
     tokens[key] = REQUIRED_TOKENS.filter((t) => t.file === key && hasToken(source, t.token)).map((t) => t.token).sort();
   }
+  const sendResult = extractSendResult(read(`${SRC}/domain/session-transport.ts`));
   return {
     mounts: extractMounts(read(`${SRC}/server.ts`)).filter((m) => REQUIRED_MOUNTS.includes(m)),
     routes,
@@ -289,6 +336,9 @@ export function extractSurfaces(root: string, read: ReadSource = (rel) => readFi
     transport: {
       outcomes: extractOutcomes(read(`${SRC}/domain/session-transport.ts`)),
       failureStatus: extractStatusMap(read(ROUTE_FILES.transport)),
+      sendRequestFields: extractSendRequestFields(read(ROUTE_FILES.transport)),
+      sendResultFields: sendResult.fields,
+      inputPhases: sendResult.inputPhases,
     },
     rigEventTypes: extractRigEventTypes(read(`${SRC}/domain/types.ts`)),
     nodeFields: extractNodeFields(read(`${SRC}/domain/types.ts`)),
@@ -336,6 +386,9 @@ export function diffRemovals(snapshot: Snapshot, current: OpenRigSurfaces): stri
     for (const t of list) if (!(current.tokens[file] ?? []).includes(t)) problems.push(`token removed in ${file}: ${t}`);
   }
   for (const o of s.transport.outcomes) if (!current.transport.outcomes.includes(o)) problems.push(`transport outcome removed: ${o}`);
+  for (const f of s.transport.sendRequestFields ?? []) if (!(current.transport.sendRequestFields ?? []).includes(f)) problems.push(`transport send request field removed: ${f}`);
+  for (const f of s.transport.sendResultFields ?? []) if (!(current.transport.sendResultFields ?? []).includes(f)) problems.push(`transport send result field removed: ${f}`);
+  for (const f of s.transport.inputPhases ?? []) if (!(current.transport.inputPhases ?? []).includes(f)) problems.push(`transport input phase removed: ${f}`);
   for (const [reason, status] of Object.entries(s.transport.failureStatus)) {
     const now = current.transport.failureStatus[reason];
     if (now === undefined) problems.push(`transport failure reason removed: ${reason}`);
