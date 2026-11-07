@@ -73,6 +73,12 @@ The daemon must have its web UI WebSocket enabled (changing `ui.enabled` require
 restart). With either flag off, `features.terminal` is false and no terminal descriptor is served.
 The daemon connection uses `GET /api/terminal/:sessionName`, bearer authentication, no redirects
 and the fixed `x-openrig-session` principal. No terminal content is logged or stored.
+Scroll frames are conflated per viewer: only the latest offset is kept (clamped to 10,000 lines), at most one is in
+flight to the daemon (released by the daemon's next output frame or after 2 s) and forwarded scrolls are at least
+100 ms apart. Terminal authorization is refused until the seat store has synced once. A daemon output frame over
+`terminal.maxFrameBytes` still closes that viewer's connection (the protocol has no in-band notice for raw ANSI output).
+`features.terminal` reflects the stored `ui.enabled` value, which only takes effect after a daemon restart; a
+connection attempt fails safe if the daemon does not actually serve the WebSocket.
 
 Clients receive raw ANSI text frames; only JSON `{type:"scroll",offset:N}` is accepted upstream
 (integer 0–100000; zero returns to live). Keys, text, paste, resize and binary input are dropped.

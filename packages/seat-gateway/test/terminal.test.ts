@@ -3,11 +3,12 @@ import { scrollFrame, terminalUpgradeUrl } from "../src/terminal.js";
 
 describe("terminal client allowlist", () => {
   it("drops keys, text, paste, resize and malformed frames", () => {
-    for (const frame of [{ type: "keys", keys: ["Enter"] }, { type: "text", text: "danger" }, { type: "paste", text: "danger" }, { type: "resize", cols: 80, rows: 24, text: "danger" }, { type: "scroll", offset: -1 }, { type: "scroll", offset: 1.5 }, { type: "scroll", offset: 100001 }, null, []]) {
+    for (const frame of [{ type: "keys", keys: ["Enter"] }, { type: "text", text: "danger" }, { type: "paste", text: "danger" }, { type: "resize", cols: 80, rows: 24, text: "danger" }, { type: "scroll", offset: -1 }, { type: "scroll", offset: 1.5 }, null, []]) {
       expect(scrollFrame(JSON.stringify(frame))).toBeUndefined();
     }
     expect(scrollFrame("{broken")).toBeUndefined();
   });
+  it("clamps huge offsets", () => { expect(scrollFrame('{"type":"scroll","offset":99999999}')).toBe('{"type":"scroll","offset":10000}'); });
   it("reconstructs only scroll offset and strips input fields", () => {
     expect(scrollFrame(JSON.stringify({ type: "scroll", offset: 20, text: "danger", keys: ["Enter"], resize: true }))).toBe('{"type":"scroll","offset":20}');
   });
@@ -33,14 +34,14 @@ class Peer extends EventEmitter implements TerminalSocket {
   close() { this.terminate(); }
   terminate() { this.terminated = true; this.readyState = 3; }
 }
-function harness(extra: Record<string, unknown> = {}) {
+function harness(extra: Record<string, unknown> = {}, synced = () => true) {
   const upstream = new Peer();
   const downstream = new Peer();
   const raw = new Duplex({ read() {}, write(_chunk, _enc, cb) { cb(); } });
   const daemon = { getJson: vi.fn(async () => ({ value: true })) } as unknown as DaemonClient;
   const config = parseConfig({ tokenFile: "t", terminal: { enabled: true, principal: "viewer@acme", maxFrameBytes: 128, maxViewers: 1, ...extra } }).terminal;
   const connect = vi.fn((_opts: Parameters<typeof import("@openrig-seats/seat-source-openrig").openTerminal>[0]) => upstream);
-  const bridge = new TerminalBridge({ config, daemon, daemonUrl: "http://127.0.0.1:7433", daemonToken: "private", seats: () => [{ id: "s1", name: "builder@acme", "x-openrig": { sessionName: "builder@acme" } }], connect,
+  const bridge = new TerminalBridge({ config, daemon, daemonUrl: "http://127.0.0.1:7433", daemonToken: "private", synced, seats: () => [{ id: "s1", name: "builder@acme", "x-openrig": { sessionName: "builder@acme" } }], connect,
     socketServer: { handleUpgrade: (_req, _socket, _head, cb) => cb(downstream), close() {} } });
   const attach = async () => {
     bridge.upgrade({} as IncomingMessage, raw, Buffer.alloc(0), async () => new Response(null, { status: 204, headers: { "x-seat-terminal-session": "builder@acme" } }));
@@ -100,6 +101,7 @@ describe("terminal bridge without network", () => {
     } finally { h.bridge.stop(); }
   });
   it("conflates early scroll into one frame and bounds upstream send buffers", async () => {
+    vi.useFakeTimers();
     const h = harness();
     h.upstream.readyState = 0;
     try {
@@ -110,8 +112,45 @@ describe("terminal bridge without network", () => {
       h.upstream.emit("open");
       expect(h.upstream.sent).toEqual(['{"type":"scroll","offset":2}']);
       h.upstream.bufferedAmount = 128;
+      h.upstream.emit("message", Buffer.from("out"), false);
       h.downstream.emit("message", Buffer.from('{"type":"scroll","offset":0}'), false);
+      await vi.advanceTimersByTimeAsync(150);
       expect(h.bridge.activeViewers()).toBe(0);
+    } finally { h.bridge.stop(); vi.useRealTimers(); }
+  });
+  it("a burst of 10,000 scrolls sends a handful of daemon frames and the last offset wins", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    try {
+      await h.attach();
+      for (let i = 1; i <= 10_000; i++) h.downstream.emit("message", Buffer.from(JSON.stringify({ type: "scroll", offset: i })), false);
+      expect(h.upstream.sent).toEqual(['{"type":"scroll","offset":1}']);
+      await vi.advanceTimersByTimeAsync(2000); // in-flight timeout releases the next one
+      expect(h.upstream.sent).toEqual(['{"type":"scroll","offset":1}', '{"type":"scroll","offset":10000}']);
+      // output releases the slot; min gap still applies
+      h.downstream.emit("message", Buffer.from('{"type":"scroll","offset":7}'), false);
+      h.downstream.emit("message", Buffer.from('{"type":"scroll","offset":8}'), false);
+      h.upstream.emit("message", Buffer.from("o"), false);
+      expect(h.upstream.sent.length).toBe(2); // gap not elapsed yet
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.upstream.sent.at(-1)).toBe('{"type":"scroll","offset":8}');
+      expect(h.upstream.sent.length).toBe(3);
+      h.downstream.emit("message", Buffer.from('{"type":"scroll","offset":9}'), false);
+      h.upstream.emit("message", Buffer.from("o"), false);
+      expect(h.upstream.sent.length).toBe(3);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.upstream.sent.at(-1)).toBe('{"type":"scroll","offset":9}');
+      expect(h.upstream.sent.length).toBe(4);
+      expect(h.bridge.activeViewers()).toBe(1);
+    } finally { h.bridge.stop(); vi.useRealTimers(); }
+  });
+  it("refuses terminal authorization until the seat store has synced", async () => {
+    let ready = false;
+    const h = harness({}, () => ready);
+    try {
+      expect(await h.bridge.authorize("s1")).toEqual({ status: 403 });
+      ready = true;
+      expect(await h.bridge.authorize("s1")).toMatchObject({ status: 204 });
     } finally { h.bridge.stop(); }
   });
   it("fails closed for ui off, malformed, unreachable, and a seat principal", async () => {
@@ -131,14 +170,20 @@ describe("terminal bridge without network", () => {
   });
   it("terminal route reuses bearer, Origin and Host checks", async () => {
     const terminal = vi.fn(async () => ({ status: 204, session: "builder@acme" }));
-    const app = createApp({ store: new Store(10), token: "t", capabilities: async () => ({ protocol: { version: "1.0" }, kinds: [], extensions: [], harnesses: [], features: {} }), enabledKinds: () => [], terminal });
-    const headers = { authorization: "Bearer t", host: "127.0.0.1", upgrade: "websocket" };
+    const app = createApp({ store: new Store(10), token: "t", capabilities: async () => ({ protocol: { version: "1.0" }, kinds: [], extensions: [], harnesses: [], features: {} }), enabledKinds: () => [], terminal, terminalKey: "k" });
+    const headers = { authorization: "Bearer t", host: "127.0.0.1", upgrade: "websocket", "x-seat-internal-upgrade": "k" };
     expect((await app.request("/terminal/s1", { headers: { ...headers, authorization: "wrong" } })).status).toBe(401);
     expect((await app.request("/terminal/s1", { headers: { ...headers, origin: "https://evil" } })).status).toBe(403);
     expect((await app.request("/terminal/s1", { headers: { ...headers, host: "evil" } })).status).toBe(403);
     expect(terminal).not.toHaveBeenCalled();
     expect((await app.request("/terminal/s1", { headers })).status).toBe(204);
-    expect((await app.request("/terminal/s1", { headers: { authorization: "Bearer t" } })).status).toBe(426);
+    expect((await app.request("/terminal/s1", { headers: { authorization: "Bearer t", "x-seat-internal-upgrade": "k" } })).status).toBe(426);
+    // a plain GET claiming Upgrade: websocket never produces the internal session header
+    for (const h of [{ authorization: "Bearer t", upgrade: "websocket" } as Record<string, string>, { authorization: "Bearer t", upgrade: "websocket", "x-seat-internal-upgrade": "wrong" }]) {
+      const r = await app.request("/terminal/s1", { headers: h as Record<string, string> });
+      expect(r.status).toBe(426);
+      expect(r.headers.get("x-seat-terminal-session")).toBeNull();
+    }
   });
 });
 

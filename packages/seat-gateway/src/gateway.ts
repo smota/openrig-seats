@@ -1,11 +1,12 @@
 import { serve, type ServerType } from "@hono/node-server";
+import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { PROTOCOL_VERSION, CORE_KINDS, OPENRIG_EVENT_KIND, OPENRIG_EXTENSION, OPENRIG_EXTENSION_VERSION, type Capabilities } from "@openrig-seats/seat-protocol";
 import { DaemonClient, OpenRigSource, readSecretFile, type Features } from "@openrig-seats/seat-source-openrig";
 import { isLoopbackBind, type GatewayConfig } from "./config.js";
 import { SendAction, sendAction } from "./act.js";
 import { IdempotencyTable } from "./idempotency.js";
-import { createApp } from "./server.js";
+import { createApp, TERMINAL_KEY_HEADER } from "./server.js";
 import { TerminalBridge, terminalUpgradeUrl } from "./terminal.js";
 import { Store } from "./store.js";
 
@@ -34,6 +35,7 @@ export class Gateway {
   private resets = 0;
   private readonly app;
   private readonly terminal: TerminalBridge | undefined;
+  private readonly terminalKey = randomBytes(32).toString("hex");
   private readonly sendAction: SendAction | undefined;
   private readonly table: IdempotencyTable | undefined;
 
@@ -48,6 +50,7 @@ export class Gateway {
       config: config.terminal, daemon, daemonUrl: config.daemonUrl,
       ...(daemonToken ? { daemonToken } : {}),
       seats: () => this.store.items("seat") as Array<Record<string, unknown>>,
+      synced: () => this.store.head() > 0,
     });
     const sendEnabled = config.act.send;
     if (sendEnabled) {
@@ -76,7 +79,7 @@ export class Gateway {
       token,
       capabilities: () => this.capabilities(),
       enabledKinds: () => this.kinds(),
-      ...(this.terminal ? { terminal: (id: string, signal?: AbortSignal) => this.terminal!.authorize(id, signal) } : {}),
+      ...(this.terminal ? { terminal: (id: string, signal?: AbortSignal) => this.terminal!.authorize(id, signal), terminalKey: this.terminalKey } : {}),
       ...(this.sendAction ? { act: (b: unknown) => this.sendAction!.handle(b) } : {}),
       allowedOrigins: config.allowedOrigins,
       allowedHosts: config.allowedHosts,
@@ -148,6 +151,7 @@ export class Gateway {
         if (!url) return new Response(null, { status: 404 });
         const headers = new Headers();
         for (const [key, value] of Object.entries(req.headers)) if (typeof value === "string" || Array.isArray(value)) headers.set(key, Array.isArray(value) ? value.join(", ") : value);
+        headers.set(TERMINAL_KEY_HEADER, this.terminalKey);
         return this.app.fetch(new Request(url, { method: req.method ?? "GET", headers, signal }));
       });
     });

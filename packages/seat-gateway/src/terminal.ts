@@ -20,13 +20,18 @@ export interface TerminalConfig {
 }
 
 /** Explicit input allowlist. Reconstruct instead of forwarding an object containing extra input fields. */
+export const MAX_SCROLL_OFFSET = 10_000;
+export const SCROLL_MIN_GAP_MS = 100;
+export const SCROLL_INFLIGHT_TIMEOUT_MS = 2000;
+
+/** Offsets above MAX_SCROLL_OFFSET are clamped: the daemon only paints one window of rows, but capture-pane reads offset+rows lines. */
 export function scrollFrame(raw: string): string | undefined {
   try {
     const v: unknown = JSON.parse(raw);
     if (typeof v !== "object" || v === null || Array.isArray(v)) return;
     const msg = v as Record<string, unknown>;
-    if (msg.type !== "scroll" || typeof msg.offset !== "number" || !Number.isInteger(msg.offset) || msg.offset < 0 || msg.offset > 100_000) return;
-    return JSON.stringify({ type: "scroll", offset: msg.offset });
+    if (msg.type !== "scroll" || typeof msg.offset !== "number" || !Number.isInteger(msg.offset) || msg.offset < 0) return;
+    return JSON.stringify({ type: "scroll", offset: Math.min(msg.offset, MAX_SCROLL_OFFSET) });
   } catch { return; }
 }
 
@@ -45,7 +50,7 @@ export class TerminalBridge {
   private readonly viewers = new Set<() => void>();
   private readonly server: TerminalSocketServer;
   private stopped = false;
-  constructor(private readonly opts: { config: TerminalConfig; daemon: DaemonClient; daemonUrl: string; daemonToken?: string; seats: () => Seat[]; socketServer?: TerminalSocketServer; connect?: typeof openTerminal }) {
+  constructor(private readonly opts: { config: TerminalConfig; daemon: DaemonClient; daemonUrl: string; daemonToken?: string; seats: () => Seat[]; /** True once the seat store has synced at least once. */ synced: () => boolean; socketServer?: TerminalSocketServer; connect?: typeof openTerminal }) {
     this.server = opts.socketServer ?? new WebSocketServer({ noServer: true, maxPayload: opts.config.maxFrameBytes, perMessageDeflate: false, clientTracking: false, autoPong: false });
   }
 
@@ -54,7 +59,7 @@ export class TerminalBridge {
   async authorize(id: string, signal?: AbortSignal): Promise<{ status: number; session?: string }> {
     if (!await this.enabled(signal)) return { status: 404 };
     const principal = this.opts.config.principal;
-    if (!principal || this.opts.seats().some((s) => s.name === principal || extension(s).sessionName === principal)) return { status: 403 };
+    if (!principal || !this.opts.synced() || this.opts.seats().some((s) => s.name === principal || extension(s).sessionName === principal)) return { status: 403 };
     const seat = this.seat(id);
     const session = seat && extension(seat).sessionName;
     return typeof session === "string" && session ? { status: 204, session } : { status: 404 };
@@ -69,9 +74,12 @@ export class TerminalBridge {
     let closed = false;
     let downstream: TerminalSocket | undefined;
     let upstream: TerminalSocket | undefined;
+    const scrollTimers = new Set<NodeJS.Timeout>();
     const finish = () => {
       if (closed) return;
       closed = true;
+      for (const t of scrollTimers) clearTimeout(t);
+      scrollTimers.clear();
       abort.abort();
       clearTimeout(timer);
       this.viewers.delete(finish);
@@ -94,7 +102,6 @@ export class TerminalBridge {
         this.server.handleUpgrade(req, socket, head, (client) => {
           downstream = client;
           if (closed) { client.terminate(); return; }
-          let earlyScroll: string | undefined;
           const max = this.opts.config.maxFrameBytes;
           const send = (peer: TerminalSocket, text: string) => {
             if (peer.readyState !== 1 || Buffer.byteLength(text) > max || peer.bufferedAmount + Buffer.byteLength(text) > max) { finish(); return; }
@@ -102,23 +109,47 @@ export class TerminalBridge {
           };
           upstream = (this.opts.connect ?? openTerminal)({ baseUrl: this.opts.daemonUrl, ...(this.opts.daemonToken ? { token: this.opts.daemonToken } : {}), principal: this.opts.config.principal!, session, maxFrameBytes: max });
           const daemon = upstream;
+          // Scroll flood control: only the latest offset is kept, one scroll is in flight to the daemon
+          // (released by its next output frame or a timeout) and forwarded scrolls are spaced apart.
+          let pending: string | undefined;
+          let inFlight = false;
+          let lastSentAt = -Infinity;
+          let gapTimer: NodeJS.Timeout | undefined;
+          let releaseTimer: NodeJS.Timeout | undefined;
+          const later = (fn: () => void, ms: number) => { const t = setTimeout(() => { scrollTimers.delete(t); fn(); }, ms); scrollTimers.add(t); return t; };
+          const pump = () => {
+            if (closed || pending === undefined || inFlight || daemon.readyState !== 1 || gapTimer) return;
+            const wait = lastSentAt + SCROLL_MIN_GAP_MS - Date.now();
+            if (wait > 0) { gapTimer = later(() => { gapTimer = undefined; pump(); }, wait); return; }
+            const frame = pending;
+            pending = undefined;
+            inFlight = true;
+            lastSentAt = Date.now();
+            releaseTimer = later(() => { releaseTimer = undefined; inFlight = false; pump(); }, SCROLL_INFLIGHT_TIMEOUT_MS);
+            send(daemon, frame);
+          };
+          const release = () => {
+            inFlight = false;
+            if (releaseTimer) { clearTimeout(releaseTimer); scrollTimers.delete(releaseTimer); releaseTimer = undefined; }
+          };
           daemon.on("open", () => {
             clearTimeout(timer);
             if (closed) { daemon.terminate(); return; }
-            if (earlyScroll) send(daemon, earlyScroll);
-            earlyScroll = undefined;
+            pump();
           });
           client.on("message", (data: Buffer, binary: boolean) => {
             if (closed || binary) return;
             if (data.byteLength > max) { finish(); return; }
             const frame = scrollFrame(data.toString("utf8"));
             if (!frame) return;
-            if (daemon.readyState === 0) earlyScroll = frame; // one conflated, bounded scroll before upstream opens
-            else send(daemon, frame);
+            pending = frame;
+            pump();
           });
           daemon.on("message", (data: Buffer, binary: boolean) => {
             if (binary || data.byteLength > max) { finish(); return; }
             send(client, data.toString("utf8"));
+            release();
+            pump();
           });
           for (const peer of [client, daemon]) {
             peer.on("ping", (data: Buffer) => {

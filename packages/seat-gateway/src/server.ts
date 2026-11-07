@@ -16,6 +16,8 @@ export interface AppOptions {
   allowedHosts?: string[];
   /** Present only when the write side is enabled: serves POST /act. */
   act?: (body: unknown) => Promise<{ httpStatus: number; response: unknown }>;
+  /** Secret known only to the in-process upgrade path; without it /terminal/:id never yields the session header. */
+  terminalKey?: string;
   terminal?: (id: string, signal?: AbortSignal) => Promise<{ status: number; session?: string }>;
   /** SSE comment interval. Default 15000. */
   heartbeatMs?: number;
@@ -24,6 +26,7 @@ export interface AppOptions {
   onStream?: (event: "open" | "close", info: { reset?: boolean; reason?: string }) => void;
 }
 
+export const TERMINAL_KEY_HEADER = "x-seat-internal-upgrade";
 const digest = (s: string) => createHash("sha256").update(s).digest();
 const LOOPBACK_HOST = /^(127(\.\d{1,3}){3}|localhost|\[::1\])(:\d+)?$/i;
 
@@ -81,9 +84,11 @@ export function createApp(opts: AppOptions): Hono {
   }
 
   if (opts.terminal) app.get("/terminal/:seatId", async (c) => {
+    const given = c.req.header(TERMINAL_KEY_HEADER);
+    const internal = opts.terminalKey !== undefined && given !== undefined && timingSafeEqual(digest(given), digest(opts.terminalKey));
+    if (!internal || c.req.header("upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "websocket_required" }, 426);
     const result = await opts.terminal!(c.req.param("seatId"), c.req.raw.signal);
     if (result.status !== 204 || !result.session) return c.json({ error: "terminal_unavailable" }, result.status as 404);
-    if (c.req.header("upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "websocket_required" }, 426);
     return new Response(null, { status: 204, headers: { "x-seat-terminal-session": result.session } });
   });
 
