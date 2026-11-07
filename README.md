@@ -21,8 +21,9 @@ can move into OpenRig later with a scope rename (OpenRig packages use the `@open
 |---|---|
 | `packages/seat-protocol` | JSON Schemas (2020-12) for `host`, `rig`, `seat`, `turn`, `attention`, `work`, the stream envelope, declared actions, `POST /act` and `GET /capabilities`; valid and invalid fixtures; generated TypeScript types; a dependency-free client (fetch plus SSE parsing, cursor resume). |
 | `packages/seat-conformance` | A checked-in snapshot of the OpenRig routes, `transport/send` outcome and failure map, and `RigEvent` names the gateway depends on, re-extracted from an OpenRig checkout; the test fails on any removal or rename. |
+| `packages/seat-readers` | Readers that turn a seat's generation record into `turn`s: `claude-jsonl`, `codex-rollout` and a plain-text fallback behind one `detect`/`follow` interface; cursor = UTF-8 byte length of complete lines; `generationId[0]` identifies the occupant. |
 
-Planned: `seat-source-openrig`, `seat-readers`, `seat-gateway`, `seat-ui`.
+Planned: `seat-source-openrig`, `seat-gateway`, `seat-ui`.
 
 ## Develop
 

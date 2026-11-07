@@ -1,0 +1,28 @@
+{
+  "name": "@openrig-seats/seat-readers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Readers that turn a seat's conversation record (Claude Code and Codex JSONL) into seat-protocol turns",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "prebuild": "npm run build -w @openrig-seats/seat-protocol",
+    "build": "tsc",
+    "precheck": "npm run build -w @openrig-seats/seat-protocol",
+    "check": "tsc --noEmit -p tsconfig.check.json",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@openrig-seats/seat-protocol": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,11 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"acme-claude-1"}
+{"type":"user","uuid":"u1","timestamp":"2026-11-07T10:00:00.000Z","sessionId":"acme-claude-1","message":{"role":"user","content":"Summarize the acme billing module, por favor: café ☕"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-11-07T10:00:02.000Z","sessionId":"acme-claude-1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"I will read the module."},{"type":"tool_use","id":"toolu_acme_1","name":"Read","input":{"file_path":"src/billing/invoice.ts"}}]}}
+{"type":"user","uuid":"u2","timestamp":"2026-11-07T10:00:03.000Z","sessionId":"acme-claude-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_acme_1","content":"export const invoice = 1;"}]}}
+{"type":"assistant","uuid":"a2","timestamp":"2026-11-07T10:00:04.000Z","sessionId":"acme-claude-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_acme_2","name":"Bash","input":{"command":"npm test","description":"Run tests"}}]}}
+{"type":"user","uuid":"u3","timestamp":"2026-11-07T10:00:09.000Z","sessionId":"acme-claude-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_acme_2","is_error":true,"content":[{"type":"text","text":"3 tests failed"}]}]}}
+{"type":"assistant","uuid":"a3","timestamp":"2026-11-07T10:00:10.000Z","sessionId":"acme-claude-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_acme_3","name":"AskUserQuestion","input":{"questions":[{"question":"Which acme environment should I deploy to?","header":"Env","multiSelect":false,"options":[{"label":"staging","description":"safe"},{"label":"production","description":"live"}]}]}}]}}
+this line is not json
+{"type":"user","uuid":"u4","timestamp":"2026-11-07T10:01:00.000Z","sessionId":"acme-claude-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_acme_3","content":"User has answered: staging"}]}}
+{"type":"assistant","uuid":"a4","timestamp":"2026-11-07T10:01:05.000Z","sessionId":"acme-claude-1","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Deployed to staging."}]}}
+{"type":"system","uuid":"s1","timestamp":"2026-11-07T10:01:06.000Z","subtype":"api_error","content":"acme upstream overloaded"}
