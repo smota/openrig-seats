@@ -1,0 +1,21 @@
+{
+  "cursor": "43",
+  "kind": "turn",
+  "id": "t1",
+  "op": "upsert",
+  "data": {
+    "id": "t1",
+    "updatedAt": "2026-11-07T12:00:00Z",
+    "seatId": "s1",
+    "role": "assistant",
+    "state": "completed",
+    "parts": [
+      {
+        "type": "text",
+        "id": "p1",
+        "phase": "end",
+        "text": "Done."
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/capabilities.v1.schema.json",
+  "title": "Seat protocol v1: GET /capabilities",
+  "type": "object",
+  "required": ["protocol", "kinds", "extensions", "harnesses", "features"],
+  "properties": {
+    "protocol": {
+      "type": "object",
+      "required": ["version"],
+      "properties": { "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$", "description": "major.minor. Within a major version only additions." } }
+    },
+    "kinds": { "type": "array", "items": { "type": "string" }, "description": "Kinds this server emits: core kinds and x-<ns>.* kinds." },
+    "extensions": { "type": "array", "items": { "type": "string", "pattern": "^x-[a-z0-9][a-z0-9-]*$" }, "description": "Extension namespaces in use." },
+    "harnesses": { "type": "array", "items": { "type": "string" } },
+    "features": { "type": "object", "additionalProperties": { "type": "boolean" }, "description": "Optional features, for example terminal." }
+  }
+}

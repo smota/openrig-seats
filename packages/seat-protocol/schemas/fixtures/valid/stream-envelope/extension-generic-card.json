@@ -1,0 +1,19 @@
+{
+  "cursor": "44",
+  "kind": "x-acme.approval",
+  "id": "ap1",
+  "op": "upsert",
+  "data": {
+    "id": "ap1",
+    "updatedAt": "2026-11-07T12:00:00Z",
+    "title": "Grant spend",
+    "summary": "EUR 40",
+    "actions": [
+      {
+        "id": "grant",
+        "label": "Grant"
+      }
+    ],
+    "amount": 40
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/attention.v1.schema.json",
+  "title": "Seat protocol v1: attention",
+  "description": "Something that needs a human: a cause, its impact and the actions that resolve it.",
+  "allOf": [{ "$ref": "common.v1.schema.json#/$defs/entity" }],
+  "type": "object",
+  "required": ["id", "updatedAt", "title", "severity", "state"],
+  "properties": {
+    "seatId": { "$ref": "common.v1.schema.json#/$defs/id" },
+    "rigId": { "$ref": "common.v1.schema.json#/$defs/id" },
+    "severity": { "enum": ["info", "warning", "critical"] },
+    "state": { "enum": ["open", "resolved"] },
+    "reason": { "type": "string", "description": "Why the item exists (cause)." },
+    "impact": { "type": "string", "description": "What is blocked while it stays open." },
+    "since": { "$ref": "common.v1.schema.json#/$defs/timestamp" }
+  }
+}

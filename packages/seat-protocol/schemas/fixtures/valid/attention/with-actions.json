@@ -1,0 +1,22 @@
+{
+  "id": "a1",
+  "updatedAt": "2026-11-07T12:00:00Z",
+  "title": "Permission prompt",
+  "severity": "warning",
+  "state": "open",
+  "seatId": "s1",
+  "reason": "Seat waits on a permission prompt",
+  "impact": "Seat is blocked",
+  "since": "2026-11-07T12:00:00Z",
+  "actions": [
+    {
+      "id": "allow",
+      "label": "Allow"
+    },
+    {
+      "id": "deny",
+      "label": "Deny",
+      "danger": true
+    }
+  ]
+}

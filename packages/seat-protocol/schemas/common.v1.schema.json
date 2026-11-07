@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/common.v1.schema.json",
+  "title": "Seat protocol v1: shared definitions",
+  "description": "Definitions reused by every kind. Unknown fields are always allowed and ignored by readers (additionalProperties is never false); extension fields should be named x-<ns>.<name>.",
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "cursor": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Opaque, server-issued stream position. Clients store it and send it back; they never parse or compare it." },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "extensionKind": { "type": "string", "pattern": "^x-[a-z0-9][a-z0-9-]*\\.[a-z0-9][a-z0-9._-]*$", "description": "Namespaced extension kind, for example x-acme.approval." },
+    "coreKind": { "enum": ["host", "rig", "seat", "turn", "attention", "work"] },
+    "action": {
+      "type": "object",
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1 },
+        "input": { "$ref": "https://json-schema.org/draft/2020-12/schema", "description": "A JSON Schema (2020-12, boolean schemas included) describing the form the UI draws for this action. Absent: the action takes no input." },
+        "danger": { "type": "boolean", "description": "True: the UI asks for confirmation before sending." }
+      }
+    },
+    "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+    "entity": {
+      "type": "object",
+      "description": "Fields every kind carries: a stable id and the time of its last change; title, summary and actions let any UI render an unknown kind as a generic card.",
+      "required": ["id", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" },
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "actions": { "$ref": "#/$defs/actions" }
+      }
+    }
+  }
+}

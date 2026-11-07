@@ -1,0 +1,12 @@
+{
+  "$comment": "OpenRig revisions this repository's conformance snapshot was extracted from and tested against.",
+  "openrig": "https://github.com/mvschwarz/openrig",
+  "tested": [
+    {
+      "role": "pinned",
+      "commit": "f5b62726ff759a857eeb76e2cbd654493fedba2f",
+      "subject": "feat(transport): transport.draft_delivery lets ordinary sends reach a seat with a draft (#2645)",
+      "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"
+    }
+  ]
+}

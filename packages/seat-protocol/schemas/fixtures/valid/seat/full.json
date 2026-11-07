@@ -1,0 +1,20 @@
+{
+  "id": "s1",
+  "updatedAt": "2026-11-07T12:00:00Z",
+  "rigId": "r1",
+  "name": "builder-1@acme",
+  "state": "active",
+  "harness": "claude-code",
+  "activity": "running tests",
+  "generationId": "g-42",
+  "attentionIds": [
+    "a1"
+  ],
+  "actions": [
+    {
+      "id": "relaunch",
+      "label": "Relaunch fresh",
+      "danger": true
+    }
+  ]
+}

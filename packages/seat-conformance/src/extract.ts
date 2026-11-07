@@ -1,0 +1,260 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import ts from "typescript";
+
+/** Route files the gateway depends on, relative to the OpenRig checkout. */
+const SRC = "packages/daemon/src";
+const ROUTE_FILES = {
+  events: `${SRC}/routes/events.ts`,
+  attention: `${SRC}/routes/attention.ts`,
+  ps: `${SRC}/routes/ps.ts`,
+  rigs: `${SRC}/routes/rigs.ts`,
+  sessions: `${SRC}/routes/sessions.ts`,
+  queue: `${SRC}/routes/queue.ts`,
+  transport: `${SRC}/routes/transport.ts`,
+} as const;
+
+/**
+ * Routes the gateway calls: file key, the Hono router variable they are registered on, method and
+ * path. The router is part of the identity: sessions.ts registers `GET /` on both the nodes and the
+ * sessions router, and only the nodes one is used.
+ */
+export const REQUIRED_ROUTES: ReadonlyArray<{ file: keyof typeof ROUTE_FILES; router: string; method: string; path: string }> = [
+  { file: "events", router: "eventsRoute", method: "get", path: "/" },
+  { file: "attention", router: "app", method: "get", path: "/" },
+  { file: "ps", router: "psRoutes", method: "get", path: "/" },
+  { file: "rigs", router: "rigsRoutes", method: "get", path: "/" },
+  { file: "rigs", router: "rigsRoutes", method: "get", path: "/:id" },
+  { file: "sessions", router: "nodesRoutes", method: "get", path: "/" },
+  { file: "sessions", router: "sessionAdminRoutes", method: "get", path: "/:sessionName/generation-record" },
+  { file: "queue", router: "app", method: "get", path: "/list" },
+  { file: "queue", router: "app", method: "get", path: "/open-human-updates" },
+  { file: "transport", router: "router", method: "post", path: "/send" },
+];
+
+/** Daemon mounts in server.ts (`app.route(prefix, ...)`) the gateway depends on. */
+export const REQUIRED_MOUNTS: readonly string[] = [
+  "/api/events",
+  "/api/attention",
+  "/api/ps",
+  "/api/rigs",
+  "/api/rigs/:rigId/nodes",
+  "/api/rigs/:rigId/sessions",
+  "/api/sessions",
+  "/api/queue",
+  "/api/transport",
+];
+
+/** Names that must keep appearing in the code (string literals and identifiers, never comments) of a route file. */
+export const REQUIRED_TOKENS: ReadonlyArray<{ file: keyof typeof ROUTE_FILES; token: string; why: string }> = [
+  { file: "events", token: "Last-Event-ID", why: "SSE resume header" },
+  { file: "events", token: "replay", why: "bounded replay (replay=0)" },
+  { file: "events", token: "rigId", why: "rig-scoped stream" },
+  { file: "sessions", token: "sinceBytes", why: "generation-record byte cursor" },
+  { file: "transport", token: "deliveryId", why: "send idempotency key" },
+];
+
+export interface OpenRigSurfaces {
+  /** Daemon mounts found in server.ts, as `app.route` / `app.get` prefixes. */
+  mounts: string[];
+  /** Every `<router>.<METHOD> <path>` registration in each required route file, as `router METHOD path`. */
+  routes: Record<string, string[]>;
+  /** Required tokens present per file. */
+  tokens: Record<string, string[]>;
+  transport: {
+    /** `outcome?:` union on the send result. */
+    outcomes: string[];
+    /** Failure reason to HTTP status, from the `statusMap` in routes/transport.ts. */
+    failureStatus: Record<string, number>;
+  };
+  /** `RigEvent` discriminant names (`type: "..."`), sorted. */
+  rigEventTypes: string[];
+}
+
+/** Reads a file of the checkout; replaceable so tests can mutate real sources in memory. */
+export type ReadSource = (rel: string) => string;
+
+function sorted<T extends string>(values: Iterable<T>): T[] {
+  return [...new Set(values)].sort();
+}
+
+/** Parsed with the TypeScript compiler, so comments never count. */
+function parse(source: string): ts.SourceFile {
+  return ts.createSourceFile("x.ts", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+}
+
+function walk(node: ts.Node, visit: (n: ts.Node) => void): void {
+  visit(node);
+  ts.forEachChild(node, (c) => walk(c, visit));
+}
+
+const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete"]);
+
+function stringArg(call: ts.CallExpression): string | null {
+  const a = call.arguments[0];
+  return a && (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a)) ? a.text : null;
+}
+
+/** `router.method("/path", ...)` calls: [router variable, method, path]. */
+function routerCalls(source: string, methods: ReadonlySet<string>): Array<[string, string, string]> {
+  const out: Array<[string, string, string]> = [];
+  walk(parse(source), (n) => {
+    if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression)) return;
+    const target = n.expression.expression;
+    const method = n.expression.name.text;
+    const path = stringArg(n);
+    if (!ts.isIdentifier(target) || !methods.has(method) || path === null || !path.startsWith("/")) return;
+    out.push([target.text, method, path]);
+  });
+  return out;
+}
+
+export function extractMounts(serverSource: string): string[] {
+  return sorted(
+    routerCalls(serverSource, new Set(["route", ...HTTP_METHODS]))
+      .filter(([router, , path]) => router === "app" && path.startsWith("/api/"))
+      .map(([, , path]) => path),
+  );
+}
+
+export function extractRoutes(source: string): string[] {
+  return sorted(routerCalls(source, HTTP_METHODS).map(([router, method, path]) => `${router} ${method.toUpperCase()} ${path}`));
+}
+
+/** True when `token` is a string literal or identifier somewhere in the code (comments excluded). */
+export function hasToken(source: string, token: string): boolean {
+  let found = false;
+  walk(parse(source), (n) => {
+    if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) && n.text === token) found = true;
+    if (ts.isIdentifier(n) && n.text === token) found = true;
+  });
+  return found;
+}
+
+export function extractStatusMap(transportSource: string): Record<string, number> {
+  let map: Record<string, number> | null = null;
+  walk(parse(transportSource), (n) => {
+    if (map || !ts.isVariableDeclaration(n) || !ts.isIdentifier(n.name) || n.name.text !== "statusMap") return; // the send handler's map is the first
+    if (!n.initializer || !ts.isObjectLiteralExpression(n.initializer)) return;
+    map = {};
+    for (const p of n.initializer.properties) {
+      if (ts.isPropertyAssignment(p) && ts.isNumericLiteral(p.initializer) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) {
+        map[p.name.text] = Number(p.initializer.text);
+      }
+    }
+  });
+  if (!map || Object.keys(map).length === 0) throw new Error("transport.ts: statusMap not found or empty");
+  return Object.fromEntries(Object.entries(map as Record<string, number>).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+function literalNames(t: ts.TypeNode): string[] {
+  if (ts.isUnionTypeNode(t)) return t.types.flatMap(literalNames);
+  if (ts.isLiteralTypeNode(t) && ts.isStringLiteral(t.literal)) return [t.literal.text];
+  return [];
+}
+
+export function extractOutcomes(sessionTransportSource: string): string[] {
+  let names: string[] = [];
+  walk(parse(sessionTransportSource), (n) => {
+    if (ts.isPropertySignature(n) && ts.isIdentifier(n.name) && n.name.text === "outcome" && n.type) {
+      const l = literalNames(n.type);
+      if (l.includes("delivered") && l.length > names.length) names = l;
+    }
+  });
+  if (names.length === 0) throw new Error("session-transport.ts: SendResult outcome union not found");
+  return sorted(names);
+}
+
+export function extractRigEventTypes(typesSource: string): string[] {
+  const names: string[] = [];
+  walk(parse(typesSource), (n) => {
+    if (!ts.isTypeAliasDeclaration(n) || n.name.text !== "RigEvent") return;
+    const members = ts.isUnionTypeNode(n.type) ? n.type.types : [n.type];
+    for (const m of members) {
+      if (!ts.isTypeLiteralNode(m)) continue;
+      for (const p of m.members) {
+        if (ts.isPropertySignature(p) && ts.isIdentifier(p.name) && p.name.text === "type" && p.type) names.push(...literalNames(p.type));
+      }
+    }
+  });
+  if (names.length === 0) throw new Error("domain/types.ts: no RigEvent variants found");
+  return sorted(names);
+}
+
+export function openrigCommit(root: string): string | null {
+  try {
+    return execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+export function extractSurfaces(root: string, read: ReadSource = (rel) => readFileSync(join(root, rel), "utf8")): OpenRigSurfaces {
+  const routes: Record<string, string[]> = {};
+  const tokens: Record<string, string[]> = {};
+  for (const [key, rel] of Object.entries(ROUTE_FILES)) {
+    const source = read(rel);
+    routes[key] = extractRoutes(source);
+    tokens[key] = REQUIRED_TOKENS.filter((t) => t.file === key && hasToken(source, t.token)).map((t) => t.token).sort();
+  }
+  return {
+    mounts: extractMounts(read(`${SRC}/server.ts`)).filter((m) => REQUIRED_MOUNTS.includes(m)),
+    routes,
+    tokens,
+    transport: {
+      outcomes: extractOutcomes(read(`${SRC}/domain/session-transport.ts`)),
+      failureStatus: extractStatusMap(read(ROUTE_FILES.transport)),
+    },
+    rigEventTypes: extractRigEventTypes(read(`${SRC}/domain/types.ts`)),
+  };
+}
+
+export interface Snapshot {
+  schema: "openrig-seats.conformance-snapshot/v1";
+  openrigCommit: string | null;
+  surfaces: OpenRigSurfaces;
+  /** Routes, mounts and tokens the gateway depends on (checked for removal, not for addition). */
+  required: {
+    routes: Array<{ file: string; router: string; method: string; path: string }>;
+    mounts: string[];
+    tokens: Array<{ file: string; token: string; why: string }>;
+  };
+}
+
+export function buildSnapshot(root: string, read?: ReadSource): Snapshot {
+  return {
+    schema: "openrig-seats.conformance-snapshot/v1",
+    openrigCommit: openrigCommit(root),
+    surfaces: extractSurfaces(root, read),
+    required: {
+      routes: REQUIRED_ROUTES.map((r) => ({ ...r })),
+      mounts: [...REQUIRED_MOUNTS],
+      tokens: REQUIRED_TOKENS.map((t) => ({ ...t })),
+    },
+  };
+}
+
+/**
+ * Everything in `snapshot` that is missing or changed in `current`. Additions in `current` are
+ * allowed; removals, renames and changed status codes are reported.
+ */
+export function diffRemovals(snapshot: Snapshot, current: OpenRigSurfaces): string[] {
+  const problems: string[] = [];
+  const s = snapshot.surfaces;
+  for (const m of s.mounts) if (!current.mounts.includes(m)) problems.push(`mount removed: ${m}`);
+  for (const [file, list] of Object.entries(s.routes)) {
+    for (const r of list) if (!(current.routes[file] ?? []).includes(r)) problems.push(`route removed in ${file}: ${r}`);
+  }
+  for (const [file, list] of Object.entries(s.tokens)) {
+    for (const t of list) if (!(current.tokens[file] ?? []).includes(t)) problems.push(`token removed in ${file}: ${t}`);
+  }
+  for (const o of s.transport.outcomes) if (!current.transport.outcomes.includes(o)) problems.push(`transport outcome removed: ${o}`);
+  for (const [reason, status] of Object.entries(s.transport.failureStatus)) {
+    const now = current.transport.failureStatus[reason];
+    if (now === undefined) problems.push(`transport failure reason removed: ${reason}`);
+    else if (now !== status) problems.push(`transport failure status changed: ${reason} ${status} -> ${now}`);
+  }
+  for (const t of s.rigEventTypes) if (!current.rigEventTypes.includes(t)) problems.push(`RigEvent variant removed: ${t}`);
+  return problems;
+}

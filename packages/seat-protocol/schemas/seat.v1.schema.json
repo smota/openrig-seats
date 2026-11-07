@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/seat.v1.schema.json",
+  "title": "Seat protocol v1: seat",
+  "allOf": [{ "$ref": "common.v1.schema.json#/$defs/entity" }],
+  "type": "object",
+  "required": ["id", "updatedAt", "rigId", "name", "state"],
+  "properties": {
+    "rigId": { "$ref": "common.v1.schema.json#/$defs/id" },
+    "name": { "type": "string", "minLength": 1 },
+    "harness": { "type": "string", "description": "Agent CLI behind the seat, for example claude-code, codex, agy, pi. Open set." },
+    "state": { "enum": ["active", "idle", "needs-input", "blocked", "stopped", "unknown"] },
+    "activity": { "type": "string", "description": "One line on what the seat is doing now." },
+    "generationId": { "type": "string", "description": "Identity of the seat's current conversation record; a change starts a new conversation segment." },
+    "attentionIds": { "type": "array", "items": { "$ref": "common.v1.schema.json#/$defs/id" } }
+  }
+}

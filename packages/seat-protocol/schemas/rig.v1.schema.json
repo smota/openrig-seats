@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/rig.v1.schema.json",
+  "title": "Seat protocol v1: rig",
+  "allOf": [{ "$ref": "common.v1.schema.json#/$defs/entity" }],
+  "type": "object",
+  "required": ["id", "updatedAt", "hostId", "name", "state"],
+  "properties": {
+    "hostId": { "$ref": "common.v1.schema.json#/$defs/id" },
+    "name": { "type": "string", "minLength": 1 },
+    "state": { "enum": ["running", "partial", "stopped", "unknown"] },
+    "seatCount": { "type": "integer", "minimum": 0 }
+  }
+}

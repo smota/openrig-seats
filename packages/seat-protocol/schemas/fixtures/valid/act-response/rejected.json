@@ -1,0 +1,9 @@
+{
+  "idempotencyKey": "7d4c1c52-aaaa",
+  "status": "rejected",
+  "replayed": false,
+  "error": {
+    "code": "unknown_action",
+    "message": "No such action"
+  }
+}

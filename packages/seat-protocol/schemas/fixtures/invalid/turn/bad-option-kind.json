@@ -1,0 +1,22 @@
+{
+  "id": "t1",
+  "updatedAt": "2026-11-07T12:00:00Z",
+  "seatId": "s1",
+  "role": "assistant",
+  "state": "completed",
+  "parts": [
+    {
+      "type": "question",
+      "id": "p3",
+      "phase": "start",
+      "prompt": "?",
+      "options": [
+        {
+          "optionId": "o1",
+          "name": "Allow",
+          "kind": "yes"
+        }
+      ]
+    }
+  ]
+}

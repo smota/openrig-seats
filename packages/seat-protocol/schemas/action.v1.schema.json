@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/action.v1.schema.json",
+  "title": "Seat protocol v1: declared action",
+  "description": "An action the server offers on an item: the UI draws a button (and a form from input) without knowing the verb.",
+  "$ref": "common.v1.schema.json#/$defs/action"
+}

@@ -1,0 +1,60 @@
+{
+  "id": "t1",
+  "updatedAt": "2026-11-07T12:00:00Z",
+  "seatId": "s1",
+  "role": "assistant",
+  "state": "running",
+  "parts": [
+    {
+      "type": "status",
+      "id": "p0",
+      "phase": "start",
+      "state": "thinking",
+      "label": "Reading files"
+    },
+    {
+      "type": "text",
+      "id": "p1",
+      "phase": "content",
+      "text": "Checking"
+    },
+    {
+      "type": "tool",
+      "id": "p2",
+      "phase": "end",
+      "name": "Bash",
+      "summary": "npm test",
+      "status": "completed"
+    },
+    {
+      "type": "question",
+      "id": "p3",
+      "phase": "start",
+      "prompt": "Run rm -rf build?",
+      "options": [
+        {
+          "optionId": "o1",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "o2",
+          "name": "Always allow",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "o3",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ]
+    },
+    {
+      "type": "x-acme.chart",
+      "id": "p4",
+      "payload": {
+        "a": 1
+      }
+    }
+  ]
+}

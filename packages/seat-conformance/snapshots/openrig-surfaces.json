@@ -1,0 +1,388 @@
+{
+  "schema": "openrig-seats.conformance-snapshot/v1",
+  "openrigCommit": "f5b62726ff759a857eeb76e2cbd654493fedba2f",
+  "surfaces": {
+    "mounts": [
+      "/api/attention",
+      "/api/events",
+      "/api/ps",
+      "/api/queue",
+      "/api/rigs",
+      "/api/rigs/:rigId/nodes",
+      "/api/rigs/:rigId/sessions",
+      "/api/sessions",
+      "/api/transport"
+    ],
+    "routes": {
+      "events": [
+        "eventsRoute GET /"
+      ],
+      "attention": [
+        "app GET /"
+      ],
+      "ps": [
+        "psRoutes GET /",
+        "psRoutes GET /resources"
+      ],
+      "rigs": [
+        "rigsRoutes DELETE /:id",
+        "rigsRoutes DELETE /:rigId/edges/:edgeId",
+        "rigsRoutes DELETE /:rigId/pods/:podRef",
+        "rigsRoutes GET /",
+        "rigsRoutes GET /:id",
+        "rigsRoutes GET /:id/graph",
+        "rigsRoutes GET /:id/status",
+        "rigsRoutes GET /summary",
+        "rigsRoutes POST /",
+        "rigsRoutes POST /:id/archive",
+        "rigsRoutes POST /:id/attach-self",
+        "rigsRoutes POST /:id/launch-plan",
+        "rigsRoutes POST /:id/release",
+        "rigsRoutes POST /:id/unarchive",
+        "rigsRoutes POST /:id/up",
+        "rigsRoutes POST /:rigId/edges",
+        "rigsRoutes POST /:rigId/expand",
+        "rigsRoutes POST /:rigId/pods/:podNamespace/members"
+      ],
+      "sessions": [
+        "nodesRoutes DELETE /:logicalId",
+        "nodesRoutes GET /",
+        "nodesRoutes GET /:logicalId",
+        "nodesRoutes GET /:logicalId/preview",
+        "nodesRoutes POST /:logicalId/focus",
+        "nodesRoutes POST /:logicalId/launch",
+        "nodesRoutes POST /:logicalId/open-cmux",
+        "nodesRoutes POST /launch-subset",
+        "sessionAdminRoutes GET /:sessionName/generation-record",
+        "sessionAdminRoutes GET /:sessionName/generation-record-expected",
+        "sessionAdminRoutes GET /:sessionName/preview",
+        "sessionAdminRoutes POST /:sessionName/clear-attention",
+        "sessionAdminRoutes POST /:sessionName/reconcile",
+        "sessionAdminRoutes POST /:sessionName/repair-missing-pane",
+        "sessionAdminRoutes POST /:sessionName/resume-token",
+        "sessionAdminRoutes POST /:sessionRef/unclaim",
+        "sessionsRoutes GET /"
+      ],
+      "queue": [
+        "app GET /:qitemId",
+        "app GET /:qitemId/transitions",
+        "app GET /attention-aggregate",
+        "app GET /human-updates",
+        "app GET /inbox/list",
+        "app GET /inbox/pending",
+        "app GET /list",
+        "app GET /open-human-updates",
+        "app GET /outbox/list",
+        "app GET /overdue",
+        "app GET /recent-transitions",
+        "app GET /sse",
+        "app GET /undelivered",
+        "app GET /watch",
+        "app GET /whoami",
+        "app POST /:qitemId/claim",
+        "app POST /:qitemId/delegated-decision",
+        "app POST /:qitemId/fallback",
+        "app POST /:qitemId/handoff",
+        "app POST /:qitemId/handoff-and-complete",
+        "app POST /:qitemId/unclaim",
+        "app POST /:qitemId/update",
+        "app POST /create",
+        "app POST /inbox/:inboxId/absorb",
+        "app POST /inbox/:inboxId/deny",
+        "app POST /inbox/drop",
+        "app POST /outbox/record"
+      ],
+      "transport": [
+        "router POST /broadcast",
+        "router POST /capture",
+        "router POST /send",
+        "router POST /send-expected"
+      ]
+    },
+    "tokens": {
+      "events": [
+        "Last-Event-ID",
+        "replay",
+        "rigId"
+      ],
+      "attention": [],
+      "ps": [],
+      "rigs": [],
+      "sessions": [
+        "sinceBytes"
+      ],
+      "queue": [],
+      "transport": [
+        "deliveryId"
+      ]
+    },
+    "transport": {
+      "outcomes": [
+        "delivered",
+        "failed",
+        "rendered-unconfirmed",
+        "retained"
+      ],
+      "failureStatus": {
+        "caller_cancelled": 409,
+        "dangerously_interact_requires_reason": 400,
+        "delivery_already_attempted": 409,
+        "delivery_identity_conflict": 409,
+        "delivery_in_progress": 409,
+        "delivery_indeterminate": 409,
+        "draft_hold_expired": 409,
+        "draft_input_busy": 409,
+        "draft_input_changed": 409,
+        "draft_input_unknown": 409,
+        "draft_wake_superseded": 409,
+        "expected_identity_mismatch": 409,
+        "expected_identity_unavailable": 409,
+        "guard_target_changed": 409,
+        "guard_target_unknown": 409,
+        "invalid_dangerously_interact": 400,
+        "invalid_expected_identity": 400,
+        "invalid_submit_only": 400,
+        "invalid_wait_for_idle": 400,
+        "mid_work": 409,
+        "override_input_present": 409,
+        "override_input_unknown": 409,
+        "pane_in_mode": 409,
+        "prompt_override_audit_unavailable": 500,
+        "retained_quota_full": 409,
+        "send_failed": 502,
+        "session_missing": 404,
+        "staged_mismatch": 409,
+        "submit_failed": 502,
+        "target_activity_unknown": 409,
+        "target_needs_input": 409,
+        "target_runtime_conflict": 409,
+        "target_runtime_not_running": 409,
+        "target_runtime_unverified": 409,
+        "tmux_unavailable": 503,
+        "transport_unavailable": 409,
+        "typing_guard_enabled": 409,
+        "wait_for_idle_timeout": 409
+      }
+    },
+    "rigEventTypes": [
+      "agent.activity",
+      "agent.session_identity",
+      "binding.updated",
+      "bootstrap.completed",
+      "bootstrap.failed",
+      "bootstrap.partial",
+      "bootstrap.planned",
+      "bootstrap.started",
+      "bundle.created",
+      "chat.message",
+      "classifier.dead",
+      "classifier.lease_acquired",
+      "classifier.lease_expired",
+      "classifier.reclaimed",
+      "continuity.degraded",
+      "continuity.sync",
+      "event.delivery_poisoned",
+      "inbox.absorbed",
+      "inbox.denied",
+      "kernel.agent.degraded",
+      "mission_control.action_executed",
+      "mission_control.cli_drift_detected",
+      "mission_control.notification_failed",
+      "mission_control.notification_sent",
+      "node.added",
+      "node.claimed",
+      "node.codex_permissions_changed",
+      "node.codex_profile_changed",
+      "node.cwd_changed",
+      "node.effort_changed",
+      "node.held",
+      "node.launched",
+      "node.model_changed",
+      "node.permission_rules_changed",
+      "node.permissions_changed",
+      "node.permissions_to_changed",
+      "node.policy_changed",
+      "node.reconciled",
+      "node.removed",
+      "node.startup_challenged",
+      "node.startup_failed",
+      "node.startup_first_input_passed",
+      "node.startup_model_passed",
+      "node.startup_pending",
+      "node.startup_proof_rejected",
+      "node.startup_proof_skipped",
+      "node.startup_proof_verified",
+      "node.startup_ready",
+      "node.terminal_policy_changed",
+      "package.install_failed",
+      "package.installed",
+      "package.planned",
+      "package.rolledback",
+      "package.validated",
+      "pod.created",
+      "pod.deleted",
+      "project.classified",
+      "proof.judged",
+      "proof.sources_changed",
+      "qitem.closure_overdue",
+      "qitem.fallback_routed",
+      "queue.claimed",
+      "queue.created",
+      "queue.handed_off",
+      "queue.unclaimed",
+      "queue.updated",
+      "restore.completed",
+      "restore.outcome_reconciled",
+      "restore.started",
+      "restore.subset_completed",
+      "rig.archived",
+      "rig.created",
+      "rig.deleted",
+      "rig.expanded",
+      "rig.imported",
+      "rig.stopped",
+      "rig.unarchived",
+      "scope.sources_changed",
+      "seat.attention_clear_refused",
+      "seat.attention_cleared",
+      "seat.claude_token_not_applied",
+      "seat.fresh_launch_failed",
+      "seat.fresh_launched",
+      "seat.handover_completed",
+      "seat.model_divergence",
+      "seat.restart_in_place_finished",
+      "seat.restart_in_place_started",
+      "seat.runtime_changed",
+      "session.cleaned",
+      "session.detached",
+      "session.discovered",
+      "session.resume_token_captured",
+      "session.resume_token_set",
+      "session.status_changed",
+      "session.stopped",
+      "session.vanished",
+      "snapshot.created",
+      "stream.emitted",
+      "topology.roster_recorded",
+      "transport.prompt_override",
+      "view.changed",
+      "watchdog.evaluation_fired",
+      "watchdog.evaluation_skipped",
+      "watchdog.evaluation_terminal",
+      "watchdog.job_registered",
+      "watchdog.job_stopped",
+      "watchdog.job_updated",
+      "workflow.completed",
+      "workflow.failed",
+      "workflow.instantiated",
+      "workflow.next_qitem_projected",
+      "workflow.resumed",
+      "workflow.revised",
+      "workflow.routing_table_changed",
+      "workflow.step_closed",
+      "workflow_spec.removed"
+    ]
+  },
+  "required": {
+    "routes": [
+      {
+        "file": "events",
+        "router": "eventsRoute",
+        "method": "get",
+        "path": "/"
+      },
+      {
+        "file": "attention",
+        "router": "app",
+        "method": "get",
+        "path": "/"
+      },
+      {
+        "file": "ps",
+        "router": "psRoutes",
+        "method": "get",
+        "path": "/"
+      },
+      {
+        "file": "rigs",
+        "router": "rigsRoutes",
+        "method": "get",
+        "path": "/"
+      },
+      {
+        "file": "rigs",
+        "router": "rigsRoutes",
+        "method": "get",
+        "path": "/:id"
+      },
+      {
+        "file": "sessions",
+        "router": "nodesRoutes",
+        "method": "get",
+        "path": "/"
+      },
+      {
+        "file": "sessions",
+        "router": "sessionAdminRoutes",
+        "method": "get",
+        "path": "/:sessionName/generation-record"
+      },
+      {
+        "file": "queue",
+        "router": "app",
+        "method": "get",
+        "path": "/list"
+      },
+      {
+        "file": "queue",
+        "router": "app",
+        "method": "get",
+        "path": "/open-human-updates"
+      },
+      {
+        "file": "transport",
+        "router": "router",
+        "method": "post",
+        "path": "/send"
+      }
+    ],
+    "mounts": [
+      "/api/events",
+      "/api/attention",
+      "/api/ps",
+      "/api/rigs",
+      "/api/rigs/:rigId/nodes",
+      "/api/rigs/:rigId/sessions",
+      "/api/sessions",
+      "/api/queue",
+      "/api/transport"
+    ],
+    "tokens": [
+      {
+        "file": "events",
+        "token": "Last-Event-ID",
+        "why": "SSE resume header"
+      },
+      {
+        "file": "events",
+        "token": "replay",
+        "why": "bounded replay (replay=0)"
+      },
+      {
+        "file": "events",
+        "token": "rigId",
+        "why": "rig-scoped stream"
+      },
+      {
+        "file": "sessions",
+        "token": "sinceBytes",
+        "why": "generation-record byte cursor"
+      },
+      {
+        "file": "transport",
+        "token": "deliveryId",
+        "why": "send idempotency key"
+      }
+    ]
+  }
+}

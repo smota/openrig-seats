@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/stream-envelope.v1.schema.json",
+  "title": "Seat protocol v1: stream envelope",
+  "description": "One message on GET /stream (SSE: id = cursor, data = this object). Unknown x-<ns>.* kinds carry the generic card fields.",
+  "type": "object",
+  "required": ["cursor", "kind", "id", "op"],
+  "properties": {
+    "cursor": { "$ref": "common.v1.schema.json#/$defs/cursor" },
+    "kind": { "oneOf": [{ "$ref": "common.v1.schema.json#/$defs/coreKind" }, { "$ref": "common.v1.schema.json#/$defs/extensionKind" }] },
+    "id": { "$ref": "common.v1.schema.json#/$defs/id" },
+    "op": { "enum": ["upsert", "delete"] },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "op": { "const": "upsert" } }, "required": ["op"] }, "then": { "required": ["data"] } },
+    { "if": { "properties": { "kind": { "const": "host" }, "op": { "const": "upsert" } }, "required": ["kind", "op"] }, "then": { "properties": { "data": { "$ref": "host.v1.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "rig" }, "op": { "const": "upsert" } }, "required": ["kind", "op"] }, "then": { "properties": { "data": { "$ref": "rig.v1.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "seat" }, "op": { "const": "upsert" } }, "required": ["kind", "op"] }, "then": { "properties": { "data": { "$ref": "seat.v1.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "turn" }, "op": { "const": "upsert" } }, "required": ["kind", "op"] }, "then": { "properties": { "data": { "$ref": "turn.v1.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "attention" }, "op": { "const": "upsert" } }, "required": ["kind", "op"] }, "then": { "properties": { "data": { "$ref": "attention.v1.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "work" }, "op": { "const": "upsert" } }, "required": ["kind", "op"] }, "then": { "properties": { "data": { "$ref": "work.v1.schema.json" } } } },
+    { "if": { "properties": { "kind": { "$ref": "common.v1.schema.json#/$defs/extensionKind" }, "op": { "const": "upsert" } }, "required": ["kind", "op"] }, "then": { "properties": { "data": { "$ref": "common.v1.schema.json#/$defs/entity" } } } }
+  ]
+}

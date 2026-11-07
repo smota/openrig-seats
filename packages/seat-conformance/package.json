@@ -1,0 +1,22 @@
+{
+  "name": "@openrig-seats/seat-conformance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Static snapshot of the OpenRig daemon surfaces the seat gateway depends on, re-extracted from an OpenRig checkout",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit -p tsconfig.check.json",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "snapshot": "node --import tsx scripts/update-snapshot.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

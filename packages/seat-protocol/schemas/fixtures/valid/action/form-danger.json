@@ -1,0 +1,16 @@
+{
+  "id": "decline",
+  "label": "Decline",
+  "danger": true,
+  "input": {
+    "type": "object",
+    "required": [
+      "reason"
+    ],
+    "properties": {
+      "reason": {
+        "type": "string"
+      }
+    }
+  }
+}

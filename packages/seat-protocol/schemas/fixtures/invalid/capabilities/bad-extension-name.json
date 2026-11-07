@@ -1,0 +1,23 @@
+{
+  "protocol": {
+    "version": "1.0"
+  },
+  "kinds": [
+    "host",
+    "rig",
+    "seat",
+    "turn",
+    "attention",
+    "work"
+  ],
+  "extensions": [
+    "acme"
+  ],
+  "harnesses": [
+    "claude-code",
+    "codex"
+  ],
+  "features": {
+    "terminal": false
+  }
+}

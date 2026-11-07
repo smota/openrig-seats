@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/act-response.v1.schema.json",
+  "title": "Seat protocol v1: POST /act response",
+  "type": "object",
+  "required": ["idempotencyKey", "status", "replayed"],
+  "properties": {
+    "idempotencyKey": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "status": { "enum": ["accepted", "completed", "rejected", "failed"] },
+    "replayed": { "type": "boolean", "description": "True: this key was seen before and the stored result is returned." },
+    "result": { "description": "Action-specific outcome." },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": { "code": { "type": "string", "minLength": 1 }, "message": { "type": "string" } }
+    }
+  },
+  "if": { "properties": { "status": { "enum": ["rejected", "failed"] } }, "required": ["status"] },
+  "then": { "required": ["error"] }
+}

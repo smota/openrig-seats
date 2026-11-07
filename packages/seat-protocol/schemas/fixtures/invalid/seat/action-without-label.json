@@ -1,0 +1,12 @@
+{
+  "id": "s1",
+  "updatedAt": "2026-11-07T12:00:00Z",
+  "rigId": "r1",
+  "name": "builder-1@acme",
+  "state": "active",
+  "actions": [
+    {
+      "id": "x"
+    }
+  ]
+}

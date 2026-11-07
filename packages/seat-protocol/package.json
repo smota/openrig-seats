@@ -1,0 +1,25 @@
+{
+  "name": "@openrig-seats/seat-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Seat protocol v1: JSON Schemas, generated types and a dependency-free client",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit -p tsconfig.check.json",
+    "generate": "node scripts/generate-types.mjs",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "json-schema-to-typescript": "^15.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

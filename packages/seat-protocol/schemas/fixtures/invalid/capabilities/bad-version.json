@@ -1,0 +1,21 @@
+{
+  "protocol": {
+    "version": "v1"
+  },
+  "kinds": [
+    "host",
+    "rig",
+    "seat",
+    "turn",
+    "attention",
+    "work"
+  ],
+  "extensions": [],
+  "harnesses": [
+    "claude-code",
+    "codex"
+  ],
+  "features": {
+    "terminal": false
+  }
+}

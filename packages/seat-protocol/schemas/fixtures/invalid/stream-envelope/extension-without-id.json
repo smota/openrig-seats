@@ -1,0 +1,9 @@
+{
+  "cursor": "45",
+  "kind": "x-acme.approval",
+  "id": "ap1",
+  "op": "upsert",
+  "data": {
+    "title": "no id"
+  }
+}

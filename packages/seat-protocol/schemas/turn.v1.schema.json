@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/turn.v1.schema.json",
+  "title": "Seat protocol v1: turn",
+  "description": "One conversational turn of a seat, as ordered parts. Part lifecycle follows AG-UI naming (start, content, end); question options follow ACP permission-request options.",
+  "allOf": [{ "$ref": "common.v1.schema.json#/$defs/entity" }],
+  "type": "object",
+  "required": ["id", "updatedAt", "seatId", "role", "state", "parts"],
+  "properties": {
+    "seatId": { "$ref": "common.v1.schema.json#/$defs/id" },
+    "generationId": { "type": "string" },
+    "role": { "enum": ["user", "assistant", "system"] },
+    "state": { "enum": ["running", "completed", "failed"] },
+    "parts": { "type": "array", "items": { "$ref": "#/$defs/part" } }
+  },
+  "$defs": {
+    "phase": { "enum": ["start", "content", "end"], "description": "AG-UI style lifecycle: start opens the part, content carries (possibly partial) payload, end closes it." },
+    "part": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": { "type": { "type": "string" }, "id": { "$ref": "common.v1.schema.json#/$defs/id" } },
+      "oneOf": [
+        { "$ref": "#/$defs/textPart" },
+        { "$ref": "#/$defs/toolPart" },
+        { "$ref": "#/$defs/questionPart" },
+        { "$ref": "#/$defs/statusPart" },
+        { "$ref": "#/$defs/unknownPart" }
+      ]
+    },
+    "textPart": {
+      "type": "object",
+      "required": ["type", "id", "phase", "text"],
+      "properties": { "type": { "const": "text" }, "id": { "$ref": "common.v1.schema.json#/$defs/id" }, "phase": { "$ref": "#/$defs/phase" }, "text": { "type": "string" } }
+    },
+    "toolPart": {
+      "type": "object",
+      "required": ["type", "id", "phase", "name", "status"],
+      "properties": {
+        "type": { "const": "tool" },
+        "id": { "$ref": "common.v1.schema.json#/$defs/id" },
+        "phase": { "$ref": "#/$defs/phase" },
+        "name": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string" },
+        "status": { "enum": ["pending", "running", "completed", "failed"] }
+      }
+    },
+    "questionPart": {
+      "type": "object",
+      "required": ["type", "id", "phase", "prompt", "options"],
+      "properties": {
+        "type": { "const": "question" },
+        "id": { "$ref": "common.v1.schema.json#/$defs/id" },
+        "phase": { "$ref": "#/$defs/phase" },
+        "prompt": { "type": "string", "minLength": 1 },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/questionOption" } },
+        "answeredOptionId": { "$ref": "common.v1.schema.json#/$defs/id" }
+      }
+    },
+    "questionOption": {
+      "type": "object",
+      "required": ["optionId", "name", "kind"],
+      "properties": {
+        "optionId": { "$ref": "common.v1.schema.json#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["allow_once", "allow_always", "reject_once", "reject_always"], "description": "ACP PermissionOptionKind." }
+      }
+    },
+    "statusPart": {
+      "type": "object",
+      "required": ["type", "id", "phase", "state"],
+      "properties": {
+        "type": { "const": "status" },
+        "id": { "$ref": "common.v1.schema.json#/$defs/id" },
+        "phase": { "$ref": "#/$defs/phase" },
+        "state": { "enum": ["thinking", "working", "waiting", "idle", "error"] },
+        "label": { "type": "string" }
+      }
+    },
+    "unknownPart": {
+      "description": "A part type this version does not define (for example x-ns.*): readers skip it or draw a generic block.",
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": { "type": { "type": "string", "pattern": "^x-" } }
+    }
+  }
+}
