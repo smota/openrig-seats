@@ -13,6 +13,9 @@ export interface LineContext {
 
 export type LineParser = (value: unknown, ctx: LineContext) => Turn[];
 
+/** Per-read byte window used for native transcripts and generation records. */
+export const READ_WINDOW_BYTES = 8 * 1024 * 1024;
+
 const MAX_PENDING = 256;
 
 /** Pending-call table access that never sees inherited properties ("toString", "__proto__") and never writes the prototype. */

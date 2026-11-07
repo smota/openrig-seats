@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createClaudeJsonlReader, initialCursor, occupantGeneration, restartCursor } from "../src/index.js";
 import { assertValid, fixture, gen, serve } from "./helpers.js";
+import { READ_WINDOW_BYTES } from "../src/follow.js";
 
 const reader = createClaudeJsonlReader({ seatId: "seat-acme" });
 const line = (n: number, text: string) => JSON.stringify({ type: "user", uuid: `u${n}`, timestamp: "2026-11-07T10:00:00Z", message: { role: "user", content: text } }) + "\n";
@@ -34,7 +35,7 @@ describe("cursor rule", () => {
   });
 
   it("handles a multi-byte character split at the 8 MiB read boundary with no loss or duplicate", () => {
-    const cap = 8 * 1024 * 1024;
+    const cap = READ_WINDOW_BYTES;
     const head = line(1, "start");
     // pad so the next line's two-byte "é" straddles byte `cap`
     const prefixBytes = `{"type":"user","uuid":"u2","message":{"role":"user","content":"`;

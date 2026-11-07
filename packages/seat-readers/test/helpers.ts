@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import type { Turn } from "@openrig-seats/seat-protocol";
+import { READ_WINDOW_BYTES } from "../src/follow.js";
 import type { GenerationRecord } from "../src/index.js";
 
 export const fixture = (name: string): Buffer => readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", name));
@@ -11,7 +12,7 @@ export const fixture = (name: string): Buffer => readFileSync(join(dirname(fileU
 export const gen = (occupant = "occ-1", file = 1) => JSON.stringify([occupant, "acme-session", "record.jsonl", 1, file, 1700000000000]);
 
 /** Behaves like OpenRig's route: slice bytes from `since`, cap the read, decode as UTF-8 (a cut character becomes U+FFFD). */
-export function serve(file: Buffer, since: number, generationId = gen(), cap = 8 * 1024 * 1024): GenerationRecord {
+export function serve(file: Buffer, since: number, generationId = gen(), cap = READ_WINDOW_BYTES): GenerationRecord {
   const length = Math.min(file.length - since, cap);
   return { generationId, sessionId: "acme-session", totalBytes: file.length, suffix: file.subarray(since, since + length).toString("utf8"), truncated: file.length - since > length, sinceBytes: since };
 }
