@@ -73,15 +73,19 @@ The daemon must have its web UI WebSocket enabled (changing `ui.enabled` require
 restart). With either flag off, `features.terminal` is false and no terminal descriptor is served.
 The daemon connection uses `GET /api/terminal/:sessionName`, bearer authentication, no redirects
 and the fixed `x-openrig-session` principal. No terminal content is logged or stored.
-Scroll frames are conflated per viewer: only the latest offset is kept (clamped to 10,000 lines), at most one is in
-flight to the daemon (released by the daemon's next output frame or after 2 s) and forwarded scrolls are at least
-100 ms apart. Terminal authorization is refused until the seat store has synced once. A daemon output frame over
+Scroll frames are conflated per viewer: only the latest offset is kept (offsets above 10,000 lines are clamped to
+10,000). At most one scroll is in flight to the daemon per viewer; it is released by the first daemon output frame
+that arrives at least 150 ms after the scroll was sent, or after 2 s, and forwarded scrolls are at least 100 ms
+apart. So one viewer causes at most about 6 daemon captures per second whatever the pane prints, and the gateway
+forwards at most 20 scrolls per second across all viewers. Terminal authorization is refused (403) until one full
+resync has read every rig's seats; after that it stays allowed on the last-known seats even if a later resync fails
+(a seat created in that window is not yet known, which the daemon's own checks still cover). A daemon output frame over
 `terminal.maxFrameBytes` still closes that viewer's connection (the protocol has no in-band notice for raw ANSI output).
 `features.terminal` reflects the stored `ui.enabled` value, which only takes effect after a daemon restart; a
 connection attempt fails safe if the daemon does not actually serve the WebSocket.
 
 Clients receive raw ANSI text frames; only JSON `{type:"scroll",offset:N}` is accepted upstream
-(integer 0–100000; zero returns to live). Keys, text, paste, resize and binary input are dropped.
+(integer 0–100000; the gateway clamps above 10,000; zero returns to live). Keys, text, paste, resize and binary input are dropped.
 Unknown fields are stripped from scroll frames. The daemon owns terminal geometry; the gateway
 never requests a resize or input. Terminal output can contain sensitive session content, so enable
 it only for trusted gateway clients. Handshakes require an Authorization header; URL tokens are

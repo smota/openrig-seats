@@ -256,6 +256,20 @@ describe("features", () => {
     expect(source.features().attention).toBe(false);
   });
 
+  it("seatsSynced is set only after every rig's seats were read; a later failure keeps it", async () => {
+    daemon.broken.add("/api/rigs/rig-acme-2/nodes");
+    make();
+    expect(source.status().seatsSynced).toBe(false);
+    await expect(source.resync()).rejects.toThrow();
+    expect(source.status().seatsSynced).toBe(false);
+    daemon.broken.delete("/api/rigs/rig-acme-2/nodes");
+    await source.resync();
+    expect(source.status().seatsSynced).toBe(true);
+    daemon.broken.add("/api/rigs/rig-acme-2/nodes");
+    await expect(source.resync()).rejects.toThrow();
+    expect(source.status().seatsSynced).toBe(true);
+  });
+
   it("a 500 is an outage, not a missing feature", async () => {
     daemon.broken.add("/api/attention");
     make();

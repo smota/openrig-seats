@@ -131,18 +131,42 @@ describe("terminal bridge without network", () => {
       h.downstream.emit("message", Buffer.from('{"type":"scroll","offset":7}'), false);
       h.downstream.emit("message", Buffer.from('{"type":"scroll","offset":8}'), false);
       h.upstream.emit("message", Buffer.from("o"), false);
-      expect(h.upstream.sent.length).toBe(2); // gap not elapsed yet
-      await vi.advanceTimersByTimeAsync(100);
+      expect(h.upstream.sent.length).toBe(2); // output inside the 150 ms window does not release the slot
+      await vi.advanceTimersByTimeAsync(149);
+      expect(h.upstream.sent.length).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
       expect(h.upstream.sent.at(-1)).toBe('{"type":"scroll","offset":8}');
       expect(h.upstream.sent.length).toBe(3);
       h.downstream.emit("message", Buffer.from('{"type":"scroll","offset":9}'), false);
-      h.upstream.emit("message", Buffer.from("o"), false);
-      expect(h.upstream.sent.length).toBe(3);
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(150);
+      h.upstream.emit("message", Buffer.from("o"), false); // output after the window releases at once
       expect(h.upstream.sent.at(-1)).toBe('{"type":"scroll","offset":9}');
       expect(h.upstream.sent.length).toBe(4);
       expect(h.bridge.activeViewers()).toBe(1);
     } finally { h.bridge.stop(); vi.useRealTimers(); }
+  });
+  it("caps forwarded scrolls across all viewers per second", async () => {
+    vi.useFakeTimers();
+    const ups: Peer[] = [];
+    const downs: Peer[] = [];
+    const daemon = { getJson: vi.fn(async () => ({ value: true })) } as unknown as DaemonClient;
+    const config = parseConfig({ tokenFile: "t", terminal: { enabled: true, principal: "viewer@acme", maxFrameBytes: 128, maxViewers: 50 } }).terminal;
+    const bridge = new TerminalBridge({ config, daemon, daemonUrl: "http://127.0.0.1:7433", synced: () => true, seats: () => [], connect: () => { const p = new Peer(); ups.push(p); return p; },
+      socketServer: { handleUpgrade: (_r, _s, _h, cb) => { const p = new Peer(); downs.push(p); cb(p); }, close() {} } });
+    try {
+      for (let i = 0; i < 40; i++) {
+        bridge.upgrade({} as IncomingMessage, new Duplex({ read() {}, write(_c, _e, cb) { cb(); } }), Buffer.alloc(0), async () => new Response(null, { status: 204, headers: { "x-seat-terminal-session": "b@acme" } }));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      for (const u of ups) u.emit("open");
+      for (const d of downs) d.emit("message", Buffer.from('{"type":"scroll","offset":5}'), false);
+      const total = () => ups.reduce((n, u) => n + u.sent.length, 0);
+      expect(total()).toBe(20);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(total()).toBe(20);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(total()).toBe(40);
+    } finally { bridge.stop(); vi.useRealTimers(); }
   });
   it("refuses terminal authorization until the seat store has synced", async () => {
     let ready = false;

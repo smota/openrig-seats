@@ -50,7 +50,7 @@ export class Gateway {
       config: config.terminal, daemon, daemonUrl: config.daemonUrl,
       ...(daemonToken ? { daemonToken } : {}),
       seats: () => this.store.items("seat") as Array<Record<string, unknown>>,
-      synced: () => this.store.head() > 0,
+      synced: () => this.source.status().seatsSynced,
     });
     const sendEnabled = config.act.send;
     if (sendEnabled) {

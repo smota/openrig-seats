@@ -23,6 +23,10 @@ export interface TerminalConfig {
 export const MAX_SCROLL_OFFSET = 10_000;
 export const SCROLL_MIN_GAP_MS = 100;
 export const SCROLL_INFLIGHT_TIMEOUT_MS = 2000;
+/** A scroll slot is released by output no sooner than this after the scroll was sent. */
+export const SCROLL_MIN_RELEASE_MS = 150;
+/** Forwarded scrolls across all viewers per sliding second. */
+export const SCROLL_GLOBAL_PER_SECOND = 20;
 
 /** Offsets above MAX_SCROLL_OFFSET are clamped: the daemon only paints one window of rows, but capture-pane reads offset+rows lines. */
 export function scrollFrame(raw: string): string | undefined {
@@ -50,6 +54,7 @@ export class TerminalBridge {
   private readonly viewers = new Set<() => void>();
   private readonly server: TerminalSocketServer;
   private stopped = false;
+  private readonly scrollTimes: number[] = [];
   constructor(private readonly opts: { config: TerminalConfig; daemon: DaemonClient; daemonUrl: string; daemonToken?: string; seats: () => Seat[]; /** True once the seat store has synced at least once. */ synced: () => boolean; socketServer?: TerminalSocketServer; connect?: typeof openTerminal }) {
     this.server = opts.socketServer ?? new WebSocketServer({ noServer: true, maxPayload: opts.config.maxFrameBytes, perMessageDeflate: false, clientTracking: false, autoPong: false });
   }
@@ -119,8 +124,12 @@ export class TerminalBridge {
           const later = (fn: () => void, ms: number) => { const t = setTimeout(() => { scrollTimers.delete(t); fn(); }, ms); scrollTimers.add(t); return t; };
           const pump = () => {
             if (closed || pending === undefined || inFlight || daemon.readyState !== 1 || gapTimer) return;
-            const wait = lastSentAt + SCROLL_MIN_GAP_MS - Date.now();
+            const now = Date.now();
+            while (this.scrollTimes.length && this.scrollTimes[0]! <= now - 1000) this.scrollTimes.shift();
+            const globalWait = this.scrollTimes.length >= SCROLL_GLOBAL_PER_SECOND ? this.scrollTimes[0]! + 1000 - now : 0;
+            const wait = Math.max(lastSentAt + SCROLL_MIN_GAP_MS - now, globalWait);
             if (wait > 0) { gapTimer = later(() => { gapTimer = undefined; pump(); }, wait); return; }
+            this.scrollTimes.push(now);
             const frame = pending;
             pending = undefined;
             inFlight = true;
@@ -131,6 +140,15 @@ export class TerminalBridge {
           const release = () => {
             inFlight = false;
             if (releaseTimer) { clearTimeout(releaseTimer); scrollTimers.delete(releaseTimer); releaseTimer = undefined; }
+          };
+          // Output releases the slot only once SCROLL_MIN_RELEASE_MS have passed since the send, so a busy pane
+          // cannot turn every output frame into another capture.
+          let releaseAtTimer: NodeJS.Timeout | undefined;
+          const onOutput = () => {
+            if (!inFlight) return;
+            const wait = lastSentAt + SCROLL_MIN_RELEASE_MS - Date.now();
+            if (wait <= 0) { release(); pump(); return; }
+            if (!releaseAtTimer) releaseAtTimer = later(() => { releaseAtTimer = undefined; release(); pump(); }, wait);
           };
           daemon.on("open", () => {
             clearTimeout(timer);
@@ -148,8 +166,7 @@ export class TerminalBridge {
           daemon.on("message", (data: Buffer, binary: boolean) => {
             if (binary || data.byteLength > max) { finish(); return; }
             send(client, data.toString("utf8"));
-            release();
-            pump();
+            onOutput();
           });
           for (const peer of [client, daemon]) {
             peer.on("ping", (data: Buffer) => {

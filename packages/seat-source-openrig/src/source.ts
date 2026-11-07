@@ -36,6 +36,8 @@ export interface SourceStatus {
   lastSeq: number | null;
   resyncs: number;
   reconnects: number;
+  /** True once one full resync read every rig's seats; stays true after a later failure (last-known seats). */
+  seatsSynced: boolean;
 }
 
 /** Newest events kept for `x-openrig.event`; older ones are deleted. */
@@ -77,6 +79,7 @@ export class OpenRigSource {
   private feat: Features = { host: true, rig: true, seat: true, attention: true, work: true };
   private connected = false;
   private everContacted = false;
+  private seatsSynced = false;
   private failedOnce = false;
   private degraded = false;
   /** Sets that came back as a full page: they may be incomplete, so nothing is deleted from them. */
@@ -120,7 +123,7 @@ export class OpenRigSource {
   }
 
   status(): SourceStatus {
-    return { connected: this.connected, lastSeq: this.lastSeq, resyncs: this.resyncs, reconnects: this.reconnects };
+    return { connected: this.connected, lastSeq: this.lastSeq, resyncs: this.resyncs, reconnects: this.reconnects, seatsSynced: this.seatsSynced };
   }
 
   /** Current projection per kind (the source's own mirror, used by tests and the gateway's first snapshot). */
@@ -187,6 +190,7 @@ export class OpenRigSource {
     this.resyncs++;
     await this.refreshPs(signal);
     if (this.feat.seat && this.feat.rig) await this.refreshNodes([...this.psIds()], signal);
+    this.seatsSynced = true; // reached only when ps and every rig's nodes were read without a failure
     if (this.feat.attention) await this.refreshAttention(signal);
     if (this.feat.work) await this.refreshQueue(signal);
     this.markOnline();

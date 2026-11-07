@@ -42,6 +42,19 @@ describe("terminal over a fake daemon", () => {
     peer.terminate();
     await waitFor(() => r.gateway.stats().terminalViewers === 0 && daemon.terminalConnections.size === 0);
   });
+  it("refuses terminal authorization after a partial initial load", async () => {
+    const rig2 = JSON.parse(JSON.stringify(daemon.nodes.get("rig-acme-2")))[0].canonicalSessionName as string;
+    daemon.broken.add("/api/rigs/rig-acme-2/nodes");
+    const r = await start({ terminal: { ...terminal, principal: rig2 } });
+    expect(r.gateway.stats().source.connected).toBe(false);
+    const seat = r.gateway.store.items("seat")[0]!;
+    const refused = await new Promise<string>((resolve) => {
+      const { peer } = connect(`${r.url}/terminal/${encodeURIComponent(String(seat.id))}`);
+      peer.on("error", (e: Error) => resolve(e.message));
+      peer.on("open", () => resolve("open"));
+    });
+    expect(refused).toContain("403");
+  });
   it("advertises only with both flags on and disables on probe failure", async () => {
     const r = await start();
     const caps = () => fetch(`${r.url}/capabilities`, { headers: auth }).then((res) => res.json());
