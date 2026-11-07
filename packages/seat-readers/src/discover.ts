@@ -50,7 +50,8 @@ async function containedSessions(files: string[], base: string): Promise<string[
   const result: string[] = [];
   for (const file of files) {
     try {
-      if (isInside(base, await realpath(file))) result.push(file);
+      const resolved = await realpath(file);
+      if (isInside(base, resolved)) result.push(resolved);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }

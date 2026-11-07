@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, symlink, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -34,6 +34,15 @@ for (const [name, discover, rootPath, sessionPath] of [
         const file = await session(root);
         expect(await discover({ home })).toEqual([file]);
         expect(await discover({ root })).toEqual([file]);
+      });
+    });
+
+    it("returns the validated realpath through an injected home alias", async () => {
+      await layout(async (home, outside) => {
+        const file = await session(join(home, rootPath));
+        const alias = join(outside, "home-alias");
+        await symlink(home, alias, "dir");
+        expect(await discover({ home: alias })).toEqual([await realpath(file)]);
       });
     });
 

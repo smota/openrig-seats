@@ -1,6 +1,10 @@
 import type { Part, Turn } from "@openrig-seats/seat-protocol";
 import { asRecord, followLines, turnTime, type LineContext } from "./follow.js";
 import type { ReaderOptions, SeatReader } from "./types.js";
+import { readNativeSession } from "./native-file.js";
+
+/** Read a path returned by discoverAgySessions before passing its text to follow. */
+export const readAgySession = readNativeSession;
 
 /** Antigravity CLI's brain/<session>/.system_generated/logs/transcript.jsonl.
  * GENERIC content is opaque tool output, not assistant prose. Tool calls have no native ids/results; planner status does not prove execution or result.

@@ -9,6 +9,10 @@ import {
   type LineContext,
 } from "./follow.js";
 import type { ReaderOptions, SeatReader } from "./types.js";
+import { readNativeSession } from "./native-file.js";
+
+/** Read a path returned by discoverPiSessions before passing its text to follow. */
+export const readPiSession = readNativeSession;
 
 /** Pi session v3 JSONL: message entries hold user/assistant/toolResult messages.
  * Metadata, branch summaries, custom records, tool arguments/results and thinking text are omitted.
