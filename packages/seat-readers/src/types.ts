@@ -80,6 +80,8 @@ export function occupantGeneration(generationId: string | null | undefined): str
 }
 
 export interface ReaderOptions {
+  /** Agy/Pi only: include user/assistant prose (default false). Never includes tool payloads or thoughts. */
+  includeText?: boolean;
   seatId: string;
   /** Clock for turns whose line carries no timestamp. */
   now?: () => Date;

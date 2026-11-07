@@ -150,8 +150,8 @@ describe("reader selection", () => {
   it("picks by harness and falls back to plain text", () => {
     expect(selectReader({ id: "s", harness: "claude-code" }, readers).name).toBe("claude-jsonl");
     expect(selectReader({ id: "s", harness: "codex" }, readers).name).toBe("codex-rollout");
-    expect(selectReader({ id: "s", harness: "agy" }, readers).name).toBe("plain-text");
-    expect(selectReader({ id: "s", harness: "pi" }, readers).name).toBe("plain-text");
+    expect(selectReader({ id: "s", harness: "agy" }, readers).name).toBe("agy-jsonl");
+    expect(selectReader({ id: "s", harness: "pi" }, readers).name).toBe("pi-jsonl");
   });
 });
 

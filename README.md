@@ -21,7 +21,7 @@ can move into OpenRig later with a scope rename (OpenRig packages use the `@open
 |---|---|
 | `packages/seat-protocol` | JSON Schemas (2020-12) for `host`, `rig`, `seat`, `turn`, `attention`, `work`, the stream envelope, declared actions, `POST /act` and `GET /capabilities`; valid and invalid fixtures; generated TypeScript types; a dependency-free client (fetch plus SSE parsing, cursor resume). |
 | `packages/seat-conformance` | A checked-in snapshot of the OpenRig routes, `transport/send` outcome and failure map, and `RigEvent` names the gateway depends on, re-extracted from an OpenRig checkout; the test fails on any removal or rename. |
-| `packages/seat-readers` | Readers that turn a seat's generation record into `turn`s: `claude-jsonl`, `codex-rollout` and a plain-text fallback behind one `detect`/`follow` interface; cursor = UTF-8 byte length of complete lines; `generationId[0]` identifies the occupant. |
+| `packages/seat-readers` | Readers that turn a seat's generation record into `turn`s: `claude-jsonl`, `codex-rollout`, `agy-jsonl`, `pi-jsonl` and a plain-text fallback behind one `detect`/`follow` interface; cursor = UTF-8 byte length of complete lines; `generationId[0]` identifies the occupant. |
 | `packages/seat-source-openrig` | The only code that knows daemon routes (GET only). Fills the `x-openrig` extension (seat detail and the `x-openrig.event` kind, see `seat-protocol`). Snapshots (`/api/ps`, `/api/rigs/:id/nodes`, `/api/attention`, `/api/queue/list`) plus the `/api/events` stream become `host`, `rig`, `seat`, `attention` and `work` upserts and deletes; resumes from the daemon's event sequence, and does a full resync on a gap or a restarted log. |
 | `packages/seat-gateway` | Read-only Hono server: `GET /capabilities`, `GET /stream`, `GET /snapshot`. See below. |
 
@@ -99,6 +99,41 @@ and sequence gap, gateway restart, slow and stalled clients, auth, Origin and Ho
 `SEAT_GATEWAY_SOAK_MS=3600000 npm test -w @openrig-seats/seat-gateway -- soak` runs the soak for an hour
 (default 3 s). `OPENRIG_SEATS_LIVE=1 OPENRIG_SEATS_LIVE_URL=http://127.0.0.1:<port>` adds GET-only live tests
 against a daemon (`OPENRIG_SEATS_LIVE_TOKEN_FILE` optionally names the daemon token file).
+
+## Native session readers
+
+`createAgyReader` reads Antigravity CLI (`agy`, `antigravity`) JSONL from
+`<home>/.gemini/antigravity-cli/brain/<session>/.system_generated/logs/transcript.jsonl`.
+This format was verified read-only against live files on this machine. `USER_INPUT`
+records provide user prose; `PLANNER_RESPONSE` provides assistant prose, thinking
+status and tool names. `GENERIC` records provide status only: their opaque content
+may be tool output. Calls have no native call IDs, so tool parts describe the
+requested action as pending without claiming execution or pairing results. A planner
+record marked `DONE` does not establish that its tools completed. Errors provide status only.
+This is Antigravity's format, **not** Gemini CLI's separate JSON session format;
+`gemini` is not auto-selected.
+
+`createPiReader` reads Pi v3 session JSONL from
+`<home>/.pi/agent/sessions/<encoded-project>/<session>.jsonl`, also verified against
+live files. `message` entries map user/assistant prose, thinking status, `toolCall`
+and `toolResult` blocks (paired by `toolCallId`), stop/error states. Metadata,
+custom entries, system prompts and branch/compaction summaries are ignored.
+These are append-order records; this reader does not reconstruct the active branch
+of Pi's session tree. All checked-in fixtures are minimal synthetic data.
+
+Both readers use the existing complete-line UTF-8 byte cursor and generation reset
+rules, and are registered by `createReaders`. Their `includeText` option defaults
+to `false`; `true` adds only user/assistant prose. Tool arguments, tool output,
+thought content, signatures and error text are never emitted. Existing Claude,
+Codex and plain-text readers retain their existing text behavior.
+
+`discoverAgySessions({home})` and `discoverPiSessions({home})` return sorted native
+session paths using directory entries only. Alternatively pass `{root}` to name
+the Antigravity `brain` or Pi `sessions` directory directly (takes precedence over
+`home`). A home or root must be injected; there is no implicit user home. Missing
+roots return an empty list; symlink entries are excluded. Discovery does not open
+transcripts. Callers read the discovered file and pass its suffix through the
+existing `GenerationRecord` interface; the reader itself performs no file I/O.
 
 ## Develop
 

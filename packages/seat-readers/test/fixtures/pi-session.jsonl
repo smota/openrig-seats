@@ -1,0 +1,6 @@
+{"type":"session","version":3,"id":"synthetic-session","timestamp":"2026-11-07T10:00:00Z","cwd":"/synthetic"}
+{"type":"message","id":"u1","parentId":null,"timestamp":"2026-11-07T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Synthetic prompt ☕"}],"timestamp":1794045600000}}
+{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-11-07T10:00:01Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"PRIVATE_THOUGHT"},{"type":"text","text":"Synthetic reply"},{"type":"toolCall","id":"call1","name":"read","arguments":{"path":"PRIVATE_ARGUMENT"}}],"stopReason":"toolUse"}}
+{"type":"message","id":"r1","parentId":"a1","timestamp":"2026-11-07T10:00:02Z","message":{"role":"toolResult","toolCallId":"call1","toolName":"read","isError":true,"content":[{"type":"text","text":"PRIVATE_TOOL_OUTPUT"}],"details":{"secret":"PRIVATE_DETAIL"}}}
+{"type":"message","id":"a2","parentId":"r1","timestamp":"2026-11-07T10:00:03Z","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"PRIVATE_ERROR"}}
+{"type":"custom","customType":"private","data":"PRIVATE_CUSTOM"}
