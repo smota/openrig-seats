@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/stream-control.v1.schema.json",
+  "title": "Seat protocol v1: stream control",
+  "description": "A control message on GET /stream, sent as SSE `event: control` with no id (so it never moves the cursor). `reset`: the cursor the client sent cannot be honoured; drop everything held and apply the full state that follows. Readers ignore control types they do not know.",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": { "type": "string", "minLength": 1 },
+    "reason": { "enum": ["cursor-unknown", "cursor-pruned", "cursor-ahead"] }
+  },
+  "if": { "properties": { "type": { "const": "reset" } }, "required": ["type"] },
+  "then": { "required": ["type", "reason"] }
+}

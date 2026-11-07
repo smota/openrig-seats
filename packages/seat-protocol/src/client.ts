@@ -1,5 +1,6 @@
 import { parseSSE } from "./sse.js";
-import type { ActResponse, Capabilities, StreamEnvelope } from "./types.generated.js";
+import type { ActResponse, Capabilities, StreamControl, StreamEnvelope } from "./types.generated.js";
+import type { StreamItem } from "./kinds.js";
 
 export class SeatClientError extends Error {
   constructor(
@@ -39,6 +40,12 @@ export interface StreamOptions {
   onCursor?: (cursor: string) => void;
   /** Called on a dropped connection before the reconnect delay. */
   onReconnect?: (info: { attempt: number; cursor: string | undefined; error?: unknown }) => void;
+  /**
+   * Called when the server could not honour the cursor and sends `reset`: everything held is stale.
+   * The reset is also yielded (feed it to Mirror.apply, which clears), and the cursor is dropped so a
+   * reconnect during the replay starts clean.
+   */
+  onReset?: (control: StreamControl) => void;
   /** Called for a message that is not a valid envelope (it is skipped). */
   onSkipped?: (reason: string, raw: string) => void;
 }
@@ -122,12 +129,12 @@ export class SeatClient {
   }
 
   /**
-   * GET /stream as an async iterator of envelopes. Reconnects with the last delivered cursor
+   * GET /stream as an async iterator of envelopes (and control messages, see onReset). Reconnects with the last delivered cursor
    * (Last-Event-ID header and `cursor` query), so the consumer sees no gap; an envelope whose cursor
    * equals the last delivered one is dropped. Ends when `signal` aborts; throws on 401/403/404 and
    * after `maxAttempts` consecutive failures.
    */
-  async *stream(options: StreamOptions = {}): AsyncGenerator<StreamEnvelope> {
+  async *stream(options: StreamOptions = {}): AsyncGenerator<StreamItem> {
     const { signal } = options;
     let cursor = options.cursor;
     let failures = 0;
@@ -154,6 +161,21 @@ export class SeatClient {
         }
         for await (const msg of parseSSE(res.body, { onRetry: (ms) => (serverRetryMs = ms) })) {
           failures = 0;
+          if (msg.event === "control") {
+            let control: unknown;
+            try {
+              control = JSON.parse(msg.data);
+            } catch {
+              options.onSkipped?.("invalid JSON", msg.data);
+              continue;
+            }
+            if (typeof control === "object" && control !== null && (control as { type?: unknown }).type === "reset") {
+              cursor = undefined;
+              options.onReset?.(control as StreamControl);
+              yield control as StreamControl;
+            }
+            continue; // control types this version does not know are ignored
+          }
           let parsed: unknown;
           try {
             parsed = JSON.parse(msg.data);

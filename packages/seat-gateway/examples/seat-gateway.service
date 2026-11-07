@@ -1,0 +1,22 @@
+# systemd --user unit for the read-only seat gateway.
+# Install:
+#   mkdir -p ~/.config/systemd/user ~/.config/seat-gateway
+#   cp seat-gateway.service ~/.config/systemd/user/
+#   cp seat-gateway.config.json ~/.config/seat-gateway/config.json
+#   umask 077; openssl rand -hex 32 > ~/.config/seat-gateway/token      # clients send this as a bearer
+#   systemctl --user daemon-reload && systemctl --user enable --now seat-gateway
+# Edit ExecStart to the directory where you built this repository.
+[Unit]
+Description=Seat gateway (read-only view of an OpenRig daemon)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env node %h/openrig-seats/packages/seat-gateway/dist/main.js --config %h/.config/seat-gateway/config.json
+Restart=on-failure
+RestartSec=3
+# The gateway is a cache and holds no data worth keeping; it rebuilds from the daemon on every start.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

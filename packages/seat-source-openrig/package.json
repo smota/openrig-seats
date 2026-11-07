@@ -1,0 +1,26 @@
+{
+  "name": "@openrig-seats/seat-source-openrig",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The only code that knows OpenRig daemon routes: snapshots plus the events stream become seat protocol kinds",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check": "npm run build -w @openrig-seats/seat-protocol && tsc --noEmit -p tsconfig.check.json",
+    "pretest": "npm run build -w @openrig-seats/seat-protocol && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@openrig-seats/seat-protocol": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -11,7 +11,7 @@ const outFile = join(root, "src/types.generated.ts");
 const NAMES = {
   host: "Host", rig: "Rig", seat: "Seat", turn: "Turn", attention: "Attention", work: "Work",
   action: "DeclaredAction", "act-request": "ActRequest", "act-response": "ActResponse",
-  capabilities: "Capabilities", "stream-envelope": "StreamEnvelope",
+  capabilities: "Capabilities", "stream-envelope": "StreamEnvelope", "stream-control": "StreamControl",
 };
 
 // The 2020-12 meta-schema is referenced by URL: type it locally instead of fetching it, and type

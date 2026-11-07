@@ -343,3 +343,14 @@ features: {
 }
 [k: string]: unknown
 }
+/**
+ * A control message on GET /stream, sent as SSE `event: control` with no id (so it never moves the cursor). `reset`: the cursor the client sent cannot be honoured; drop everything held and apply the full state that follows. Readers ignore control types they do not know.
+ * 
+ * This interface was referenced by `SeatProtocol`'s JSON-Schema
+ * via the `definition` "StreamControl".
+ */
+export interface StreamControl {
+type: string
+reason?: ("cursor-unknown" | "cursor-pruned" | "cursor-ahead")
+[k: string]: unknown
+}

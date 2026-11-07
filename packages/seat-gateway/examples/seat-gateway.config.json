@@ -1,0 +1,7 @@
+{
+  "daemonUrl": "http://127.0.0.1:7433",
+  "tokenFile": "~/.config/seat-gateway/token",
+  "listen": { "host": "127.0.0.1", "port": 8088 },
+  "hostId": "local",
+  "hostName": "acme-host"
+}
