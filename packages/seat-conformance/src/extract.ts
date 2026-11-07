@@ -14,6 +14,8 @@ const ROUTE_FILES = {
   queue: `${SRC}/routes/queue.ts`,
   transport: `${SRC}/routes/transport.ts`,
   senderIdentity: `${SRC}/routes/require-sender-identity.ts`,
+  config: `${SRC}/routes/config.ts`,
+  terminal: `${SRC}/routes/terminal-ws.ts`,
 } as const;
 
 /**
@@ -22,6 +24,8 @@ const ROUTE_FILES = {
  * sessions router, and only the nodes one is used.
  */
 export const REQUIRED_ROUTES: ReadonlyArray<{ file: keyof typeof ROUTE_FILES; router: string; method: string; path: string }> = [
+  { file: "config", router: "router", method: "get", path: "/:key" },
+  { file: "terminal", router: "app", method: "get", path: "/api/terminal/:sessionName" },
   { file: "events", router: "eventsRoute", method: "get", path: "/" },
   { file: "attention", router: "app", method: "get", path: "/" },
   { file: "ps", router: "psRoutes", method: "get", path: "/" },
@@ -45,10 +49,16 @@ export const REQUIRED_MOUNTS: readonly string[] = [
   "/api/sessions",
   "/api/queue",
   "/api/transport",
+  "/api/config",
 ];
 
 /** Names that must keep appearing in the code (string literals and identifiers, never comments) of a route file. */
 export const REQUIRED_TOKENS: ReadonlyArray<{ file: keyof typeof ROUTE_FILES; token: string; why: string }> = [
+  { file: "terminal", token: "Authorization", why: "terminal bearer header" },
+  { file: "terminal", token: "keys", why: "input frame type that the gateway must drop" },
+  { file: "terminal", token: "text", why: "input frame type that the gateway must drop" },
+  { file: "terminal", token: "scroll", why: "read-only terminal scroll frame" },
+  { file: "terminal", token: "offset", why: "terminal scroll offset field" },
   { file: "events", token: "Last-Event-ID", why: "SSE resume header" },
   { file: "events", token: "replay", why: "bounded replay (replay=0)" },
   { file: "events", token: "rigId", why: "rig-scoped stream" },
@@ -95,7 +105,18 @@ export const REQUIRED_EVENT_FIELDS: Readonly<Record<string, readonly string[]>> 
 
 export type NodeFieldGroup = "node" | "activityState" | "needsInput" | "agentActivity";
 
+export interface TerminalContract {
+  frameTypes: string[];
+  scrollFields: string[];
+  uiGate: boolean;
+  configResolveOne: boolean;
+  configFields: string[];
+  uiSetting: boolean;
+}
+
 export interface OpenRigSurfaces {
+  /** Terminal input discriminants, UI gating, and config response shape read by the gateway. */
+  terminal?: TerminalContract;
   /** Daemon mounts found in server.ts, as `app.route` / `app.get` prefixes. */
   mounts: string[];
   /** Every `<router>.<METHOD> <path>` registration in each required route file, as `router METHOD path`. */
@@ -151,7 +172,8 @@ function routerCalls(source: string, methods: ReadonlySet<string>): Array<[strin
   const out: Array<[string, string, string]> = [];
   walk(parse(source), (n) => {
     if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression)) return;
-    const target = n.expression.expression;
+    let target: ts.Expression = n.expression.expression;
+    while (ts.isParenthesizedExpression(target) || ts.isAsExpression(target) || ts.isTypeAssertionExpression(target)) target = target.expression;
     const method = n.expression.name.text;
     const path = stringArg(n);
     if (!ts.isIdentifier(target) || !methods.has(method) || path === null || !path.startsWith("/")) return;
@@ -320,6 +342,52 @@ export function openrigCommit(root: string): string | null {
   }
 }
 
+/** Extract terminal contracts from syntax rather than comments or unrelated mentions. */
+export function extractTerminalContract(terminalSource: string, serverSource: string, configSource: string, settingsSource: string): TerminalContract {
+  const frameTypes: string[] = [];
+  const scrollFields: string[] = [];
+  walk(parse(terminalSource), (n) => {
+    if (!ts.isIfStatement(n)) return;
+    let frame: string | undefined;
+    walk(n.expression, (condition) => {
+      if (ts.isBinaryExpression(condition) && condition.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+        && ts.isPropertyAccessExpression(condition.left) && condition.left.expression.getText() === "msg"
+        && condition.left.name.text === "type" && ts.isStringLiteral(condition.right)) frame = condition.right.text;
+    });
+    if (!frame) return;
+    frameTypes.push(frame);
+    if (frame === "scroll") walk(n.expression, (condition) => {
+      if (ts.isPropertyAccessExpression(condition) && condition.expression.getText() === "msg" && condition.name.text !== "type") scrollFields.push(condition.name.text);
+    });
+  });
+  let uiGate = false;
+  walk(parse(serverSource), (n) => {
+    if (!ts.isIfStatement(n)) return;
+    let registration = false;
+    walk(n.thenStatement, (child) => {
+      if (ts.isCallExpression(child) && ts.isIdentifier(child.expression) && child.expression.text === "registerTerminalWs") registration = true;
+    });
+    if (!registration || !ts.isBinaryExpression(n.expression) || n.expression.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken) return;
+    const condition = n.expression.right;
+    if (n.expression.left.getText() === "deps.enableNodeWebSocket" && ts.isBinaryExpression(condition)
+      && condition.left.getText() === "deps.webUiEnabled" && condition.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+      && condition.right.kind === ts.SyntaxKind.TrueKeyword) uiGate = true;
+  });
+  let configResolveOne = false;
+  walk(parse(configSource), (n) => {
+    if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression) || n.expression.name.text !== "json") return;
+    const arg = n.arguments[0];
+    if (arg && ts.isCallExpression(arg) && ts.isPropertyAccessExpression(arg.expression)
+      && arg.expression.expression.getText() === "store" && arg.expression.name.text === "resolveOne"
+      && arg.arguments[0]?.getText() === "key") configResolveOne = true;
+  });
+  let configFields: string[] = [];
+  walk(parse(settingsSource), (n) => {
+    if (ts.isInterfaceDeclaration(n) && n.name.text === "ResolvedSetting") configFields = memberNames(n.members).filter((f) => f === "value");
+  });
+  return { frameTypes: sorted(frameTypes), scrollFields: sorted(scrollFields), uiGate, configResolveOne, configFields, uiSetting: hasToken(settingsSource, "ui.enabled") };
+}
+
 export function extractSurfaces(root: string, read: ReadSource = (rel) => readFileSync(join(root, rel), "utf8")): OpenRigSurfaces {
   const routes: Record<string, string[]> = {};
   const tokens: Record<string, string[]> = {};
@@ -330,6 +398,7 @@ export function extractSurfaces(root: string, read: ReadSource = (rel) => readFi
   }
   const sendResult = extractSendResult(read(`${SRC}/domain/session-transport.ts`));
   return {
+    terminal: extractTerminalContract(read(ROUTE_FILES.terminal), read(`${SRC}/server.ts`), read(ROUTE_FILES.config), read(`${SRC}/domain/user-settings/settings-store.ts`)),
     mounts: extractMounts(read(`${SRC}/server.ts`)).filter((m) => REQUIRED_MOUNTS.includes(m)),
     routes,
     tokens,
@@ -378,6 +447,14 @@ export function buildSnapshot(root: string, read?: ReadSource): Snapshot {
 export function diffRemovals(snapshot: Snapshot, current: OpenRigSurfaces): string[] {
   const problems: string[] = [];
   const s = snapshot.surfaces;
+  if (s.terminal) {
+    for (const f of s.terminal.frameTypes) if (!current.terminal?.frameTypes.includes(f)) problems.push(`terminal frame type removed: ${f}`);
+    for (const f of s.terminal.scrollFields) if (!current.terminal?.scrollFields.includes(f)) problems.push(`terminal scroll field removed: ${f}`);
+    for (const f of s.terminal.configFields) if (!current.terminal?.configFields.includes(f)) problems.push(`terminal config field removed: ${f}`);
+    if (s.terminal.uiGate && !current.terminal?.uiGate) problems.push("terminal UI gate removed");
+    if (s.terminal.configResolveOne && !current.terminal?.configResolveOne) problems.push("terminal config resolver changed");
+    if (s.terminal.uiSetting && !current.terminal?.uiSetting) problems.push("terminal ui.enabled setting removed");
+  }
   for (const m of s.mounts) if (!current.mounts.includes(m)) problems.push(`mount removed: ${m}`);
   for (const [file, list] of Object.entries(s.routes)) {
     for (const r of list) if (!(current.routes[file] ?? []).includes(r)) problems.push(`route removed in ${file}: ${r}`);

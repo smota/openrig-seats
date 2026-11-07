@@ -35,6 +35,7 @@ It runs server-side because OpenRig refuses a foreign browser `Origin`; the gate
 | Route | Content |
 |---|---|
 | `GET /capabilities` | Protocol version, served kinds (including `x-openrig.event`), extensions (`x-openrig`) with `extensionVersions`, harnesses seen, features. Each daemon route is probed (a 404 turns that feature and its kind off) and the answer is reused for 30 s. `features.act` is `false` and there is no `actions` list unless the operator enables `act.send` (see below). |
+| `GET /terminal/:seatId` | Optional read-only terminal WebSocket; raw ANSI output, scroll-only JSON input. Same bearer, Origin and Host checks. Off by default. |
 | `GET /stream` | SSE of the stream envelope `{cursor, kind, id, op, data}`; the SSE `id` is the cursor. Resume with `Last-Event-ID` (or `?cursor=`). |
 | `GET /snapshot/:kind`, `GET /snapshot?kind=` | Current items of one kind plus the cursor they are consistent with; without a kind, all served kinds. |
 
@@ -63,6 +64,30 @@ never opens the daemon's database. Request bodies of queue items are not copied 
 - Outcomes: `delivered` and `rendered-unconfirmed` are `completed`; `retained` is `accepted` (the daemon holds it; do not resend); a refusal with `inputPhase: not_reached` is `rejected` with the daemon's reason code; anything else (`attempted`, `written`, no answer, an unexpected status) is `failed`. The gateway never retries on its own; a person decides and uses a new key. Daemon free text is not copied into the response.
 - Sends to one seat are serialized.
 
+**Terminal view (off by default).** Set `terminal.enabled: true` and
+`terminal.principal: "viewer@<rig>"` to enable `GET /terminal/:seatId` (an encoded protocol seat
+ID). The principal is fixed gateway configuration and must be a non-seat address; client
+principal and occupant-generation headers are never forwarded. The gateway checks the daemon's
+`GET /api/config/ui.enabled` on every capability request and terminal attach, failing closed.
+The daemon must have its web UI WebSocket enabled (changing `ui.enabled` requires a daemon
+restart). With either flag off, `features.terminal` is false and no terminal descriptor is served.
+The daemon connection uses `GET /api/terminal/:sessionName`, bearer authentication, no redirects
+and the fixed `x-openrig-session` principal. No terminal content is logged or stored.
+
+Clients receive raw ANSI text frames; only JSON `{type:"scroll",offset:N}` is accepted upstream
+(integer 0–100000; zero returns to live). Keys, text, paste, resize and binary input are dropped.
+Unknown fields are stripped from scroll frames. The daemon owns terminal geometry; the gateway
+never requests a resize or input. Terminal output can contain sensitive session content, so enable
+it only for trusted gateway clients. Handshakes require an Authorization header; URL tokens are
+not accepted. Native browser WebSocket cannot set that header.
+
+Limits: `terminal.maxViewers` defaults to 8 (1–1024), including pending handshakes;
+`terminal.maxFrameBytes` defaults to 262144 (128–1048576), applied to both WebSocket peers with
+compression and automatic pong replies disabled (ping replies use the same bounded send budget). Each peer's queued output is capped at one frame budget; slow viewers,
+binary daemon output and oversized frames are disconnected. Only the newest scroll is retained
+while the daemon handshake is pending, which times out after 10 seconds. Disconnect or shutdown
+releases the viewer and upstream connection. Tests use fake daemons and in-memory sockets only.
+
 **`x-openrig` text and replay.** With `xOpenrig.includeText` off no daemon free text reaches any field, core or extension: work titles read `Queue item <id>`, attention titles `Request for a person: <id>` (or `Update ...`) with no impact. `xOpenrig.includeText: true` adds the daemon's free text (error text, prompt reason or
 summary, hold reason, event summaries, work title, attention title and impact). It is **sensitive**: the daemon may put message content or
 credentials in it. Enable it only on loopback-only deployments you trust; it is advertised as
@@ -90,7 +115,7 @@ node packages/seat-gateway/dist/main.js --config ~/.config/seat-gateway/config.j
 
 Config keys (JSON): `daemonUrl` (default `http://127.0.0.1:7433`), `daemonTokenFile`, `tokenFile`
 (required), `listen` (`host`, `port`; default `127.0.0.1:8088`), `allowNonLoopback`, `allowedOrigins`,
-`allowedHosts`, `hostId`, `hostName`, `tombstoneLimit` (default 5000), `xOpenrig` (`includeText`, default `false`; `replay`, default 2000). A leading `~/` in the token paths is
+`allowedHosts`, `hostId`, `hostName`, `tombstoneLimit` (default 5000), `xOpenrig` (`includeText`, default `false`; `replay`, default 2000), `terminal` (`enabled`, default `false`; `principal`; `maxViewers`, default 8; `maxFrameBytes`, default 262144). A leading `~/` in the token paths is
 expanded. `packages/seat-gateway/examples/` has a `systemd --user` unit and a config to copy.
 
 **Tests.** `npm test` runs against a mock daemon built from recorded-shape fixtures

@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+import type { TerminalSocket } from "../src/terminal.js";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -29,6 +31,12 @@ export interface RecordedRequest {
  * It binds 127.0.0.1 only, like the real one, and refuses a foreign Origin.
  */
 export class MockDaemon {
+  uiEnabled: unknown = false;
+  readonly terminalFrames: string[] = [];
+  readonly terminalHeaders: Array<Record<string, string | string[] | undefined>> = [];
+  readonly terminalConnections = new Set<TerminalSocket>();
+  terminalSeed = "\x1b[2Jfake terminal output";
+  terminalRedirect: string | undefined;
   ps: Array<Record<string, unknown>> = fixture("ps.json");
   nodes = new Map<string, Array<Record<string, unknown>>>([
     ["rig-acme-1", fixture("nodes-rig-acme-1.json")],
@@ -63,6 +71,20 @@ export class MockDaemon {
 
   async start(port = 0): Promise<this> {
     this.server = createServer((req, res) => this.handle(req, res));
+    const { WebSocketServer } = createRequire(import.meta.url)("ws") as { WebSocketServer: new (opts: { noServer: boolean }) => { handleUpgrade(req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer, cb: (ws: TerminalSocket) => void): void } };
+    const ws = new WebSocketServer({ noServer: true });
+    this.server.on("upgrade", (req, socket, head) => {
+      if (!req.url?.startsWith("/api/terminal/")) { socket.destroy(); return; }
+      this.terminalHeaders.push({ ...req.headers });
+      if (this.terminalRedirect) { socket.end(`HTTP/1.1 302 Found\r\nLocation: ${this.terminalRedirect}\r\nConnection: close\r\n\r\n`); return; }
+      ws.handleUpgrade(req, socket, head, (client) => {
+        this.terminalConnections.add(client);
+        client.on("error", () => {});
+        client.on("message", (data: Buffer) => this.terminalFrames.push(data.toString()));
+        client.on("close", () => this.terminalConnections.delete(client));
+        client.send(this.terminalSeed);
+      });
+    });
     await new Promise<void>((r) => this.server.listen(port, "127.0.0.1", r));
     this.port = (this.server.address() as AddressInfo).port;
     this.url = `http://127.0.0.1:${this.port}`;
@@ -70,6 +92,7 @@ export class MockDaemon {
   }
 
   async stop(): Promise<void> {
+    for (const socket of this.terminalConnections) socket.terminate();
     this.dropStreams();
     this.server.closeAllConnections();
     await new Promise<void>((r) => this.server.close(() => r()));
@@ -145,6 +168,7 @@ export class MockDaemon {
     for (const m of this.missing) if (p.startsWith(m)) return json(404, { error: "not found" });
     for (const b of this.broken) if (p.startsWith(b)) return json(500, { error: "broken" });
 
+    if (p === "/api/config/ui.enabled") return json(200, { value: this.uiEnabled, source: "file", defaultValue: false });
     if (p === "/healthz") return json(200, { status: "ok", semver: "0.0.0-mock", pid: this.pid });
     if (p === "/api/ps") return json(200, this.ps);
     const nodes = /^\/api\/rigs\/([^/]+)\/nodes$/.exec(p);

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/terminal.v1.schema.json",
+  "title": "Seat protocol v1: terminal",
+  "type": "object",
+  "required": [
+    "transport",
+    "path",
+    "readOnly",
+    "output",
+    "clientFrames",
+    "maxFrameBytes",
+    "maxViewers"
+  ],
+  "properties": {
+    "transport": {
+      "const": "websocket"
+    },
+    "path": {
+      "const": "/terminal/{seatId}"
+    },
+    "readOnly": {
+      "const": true
+    },
+    "output": {
+      "const": "ansi-text"
+    },
+    "clientFrames": {
+      "type": "array",
+      "items": {
+        "const": "scroll"
+      },
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "maxFrameBytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "maxViewers": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

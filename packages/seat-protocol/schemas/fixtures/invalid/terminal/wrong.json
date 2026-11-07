@@ -1,0 +1,11 @@
+{
+  "transport": "websocket",
+  "path": "/terminal/{seatId}",
+  "readOnly": false,
+  "output": "ansi-text",
+  "clientFrames": [
+    "scroll"
+  ],
+  "maxFrameBytes": 262144,
+  "maxViewers": 8
+}

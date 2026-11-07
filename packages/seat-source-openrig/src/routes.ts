@@ -1,5 +1,7 @@
 /** Every daemon route this repository reads. Nothing outside this package names one. All are GET. */
 export const ROUTES = {
+  uiEnabled: "/api/config/ui.enabled",
+  terminal: (session: string) => `/api/terminal/${encodeURIComponent(session)}`,
   health: "/healthz",
   ps: "/api/ps",
   nodes: (rigId: string) => `/api/rigs/${encodeURIComponent(rigId)}/nodes`,

@@ -19,7 +19,8 @@
     "@hono/node-server": "^1.13.0",
     "@openrig-seats/seat-protocol": "*",
     "@openrig-seats/seat-source-openrig": "*",
-    "hono": "^4.7.0"
+    "hono": "^4.7.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

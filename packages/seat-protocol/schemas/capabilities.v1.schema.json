@@ -26,6 +26,7 @@
         }
       }
     },
+    "terminal": { "$ref": "terminal.v1.schema.json", "description": "Present only when features.terminal is true. Read-only WebSocket terminal view." },
     "features": { "type": "object", "additionalProperties": { "type": "boolean" }, "description": "Optional features, for example terminal." }
   }
 }

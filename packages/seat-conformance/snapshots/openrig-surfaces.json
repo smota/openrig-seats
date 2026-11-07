@@ -2,8 +2,25 @@
   "schema": "openrig-seats.conformance-snapshot/v1",
   "openrigCommit": "f5b62726ff759a857eeb76e2cbd654493fedba2f",
   "surfaces": {
+    "terminal": {
+      "frameTypes": [
+        "keys",
+        "scroll",
+        "text"
+      ],
+      "scrollFields": [
+        "offset"
+      ],
+      "uiGate": true,
+      "configResolveOne": true,
+      "configFields": [
+        "value"
+      ],
+      "uiSetting": true
+    },
     "mounts": [
       "/api/attention",
+      "/api/config",
       "/api/events",
       "/api/ps",
       "/api/queue",
@@ -98,7 +115,17 @@
         "router POST /send",
         "router POST /send-expected"
       ],
-      "senderIdentity": []
+      "senderIdentity": [],
+      "config": [
+        "router DELETE /:key",
+        "router GET /",
+        "router GET /:key",
+        "router POST /:key",
+        "router POST /init-workspace"
+      ],
+      "terminal": [
+        "app GET /api/terminal/:sessionName"
+      ]
     },
     "tokens": {
       "events": [
@@ -118,6 +145,14 @@
       ],
       "senderIdentity": [
         "x-openrig-session"
+      ],
+      "config": [],
+      "terminal": [
+        "Authorization",
+        "keys",
+        "offset",
+        "scroll",
+        "text"
       ]
     },
     "transport": {
@@ -388,6 +423,18 @@
   "required": {
     "routes": [
       {
+        "file": "config",
+        "router": "router",
+        "method": "get",
+        "path": "/:key"
+      },
+      {
+        "file": "terminal",
+        "router": "app",
+        "method": "get",
+        "path": "/api/terminal/:sessionName"
+      },
+      {
         "file": "events",
         "router": "eventsRoute",
         "method": "get",
@@ -457,9 +504,35 @@
       "/api/rigs/:rigId/sessions",
       "/api/sessions",
       "/api/queue",
-      "/api/transport"
+      "/api/transport",
+      "/api/config"
     ],
     "tokens": [
+      {
+        "file": "terminal",
+        "token": "Authorization",
+        "why": "terminal bearer header"
+      },
+      {
+        "file": "terminal",
+        "token": "keys",
+        "why": "input frame type that the gateway must drop"
+      },
+      {
+        "file": "terminal",
+        "token": "text",
+        "why": "input frame type that the gateway must drop"
+      },
+      {
+        "file": "terminal",
+        "token": "scroll",
+        "why": "read-only terminal scroll frame"
+      },
+      {
+        "file": "terminal",
+        "token": "offset",
+        "why": "terminal scroll offset field"
+      },
       {
         "file": "events",
         "token": "Last-Event-ID",

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/terminal-scroll.v1.schema.json",
+  "title": "Seat protocol v1: terminal scroll",
+  "type": "object",
+  "required": [
+    "type",
+    "offset"
+  ],
+  "properties": {
+    "type": {
+      "const": "scroll"
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    }
+  }
+}

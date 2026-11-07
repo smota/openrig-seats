@@ -80,3 +80,13 @@ describe("xOpenrig config", () => {
     expect(() => parseConfig({ ...base, xOpenrig: [] })).toThrow(/xOpenrig/);
   });
 });
+
+describe("terminal config", () => {
+  it("defaults off with bounded viewers and frames", () => {
+    expect(parseConfig({ tokenFile: "t" }).terminal).toEqual({ enabled: false, maxViewers: 8, maxFrameBytes: 262144 });
+  });
+  it("requires a fixed principal when enabled and validates finite limits", () => {
+    for (const terminal of [[], { enabled: "yes" }, { enabled: true }, { principal: "bad\nheader" }, { maxViewers: 0 }, { maxViewers: 1025 }, { maxFrameBytes: 0 }, { maxFrameBytes: 1048577 }]) expect(() => parseConfig({ tokenFile: "t", terminal })).toThrow(/terminal/);
+    expect(parseConfig({ tokenFile: "t", terminal: { enabled: true, principal: "viewer@acme", maxViewers: 2, maxFrameBytes: 1024 } }).terminal).toMatchObject({ enabled: true, principal: "viewer@acme" });
+  });
+});

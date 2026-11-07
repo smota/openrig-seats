@@ -58,3 +58,18 @@ await client.act({ kind: "attention", id: "a1", action: "allow" });
 ```
 
 No runtime dependencies; uses `fetch`, and reconnects with the last cursor.
+
+## Optional read-only terminal
+
+When `features.terminal` is true, `capabilities.terminal` (schema `terminal`) declares a
+WebSocket endpoint at `/terminal/{seatId}`, its frame byte limit and viewer limit. Replace
+`{seatId}` with an encoded protocol seat ID. Authenticate the handshake with the same
+`Authorization: Bearer` header as other routes; tokens in URLs are not supported. Clients
+need a WebSocket implementation that supports handshake headers.
+
+Server frames are raw UTF-8 ANSI terminal text, not stream envelopes or JSON. Client frames
+are JSON `{ "type": "scroll", "offset": 0 }` (schema `terminal-scroll`); offset is an integer
+0–100000 lines above the live bottom, with zero returning to live output. The gateway
+reconstructs this allowlist and drops every other input type, including keys, text, paste and
+resize. Extra fields are ignored. A slow viewer or oversized frame closes the connection;
+reconnect to obtain a fresh daemon snapshot. There is no terminal replay cursor.

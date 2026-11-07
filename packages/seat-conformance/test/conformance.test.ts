@@ -7,6 +7,7 @@ import {
   REQUIRED_INPUT_PHASES,
   REQUIRED_SEND_REQUEST_FIELDS,
   REQUIRED_SEND_RESULT_FIELDS,
+  extractTerminalContract,
   extractSendRequestFields,
   extractSendResult,
   REQUIRED_MOUNTS,
@@ -157,6 +158,16 @@ describe("removal detection", () => {
 });
 
 describe("extractors", () => {
+  it("reads cast router registrations and the terminal input contract", () => {
+    expect(extractRoutes(`(app as any).get("/api/terminal/:sessionName", h);`)).toEqual(["app GET /api/terminal/:sessionName"]);
+    expect(extractTerminalContract(`if (msg.type === "scroll" && typeof msg.offset === "number") broker.scroll(subscriber, msg.offset);`,
+      `if (deps.enableNodeWebSocket && deps.webUiEnabled === true) { registerTerminalWs(app, ws); }`,
+      `router.get("/:key", c => c.json(store.resolveOne(key)));`,
+      `interface ResolvedSetting { value: boolean; source: string; } const keys = ["ui.enabled"];`)).toEqual({
+        frameTypes: ["scroll"], scrollFields: ["offset"], uiGate: true, configResolveOne: true, configFields: ["value"], uiSetting: true,
+      });
+  });
+
   it("reads node and event fields from type declarations, ignoring comments", () => {
     const src = `interface AgentActivity { state: string; reason: string }
       export interface NodeInventoryEntry { nodeId: string; // heldReason: string
@@ -233,6 +244,23 @@ describe.skipIf(!available)("mutations of the checkout sources are detected", ()
     };
     return diffRemovals(snapshot, extractSurfaces(root, reader));
   };
+
+  it("detects terminal route and scroll contract removal", () => {
+    const path = "packages/daemon/src/routes/terminal-ws.ts";
+    expect(mutate(path, /"\/api\/terminal\/:sessionName"/g, '"/api/terminal-renamed/:sessionName"')).toContain("route removed in terminal: app GET /api/terminal/:sessionName");
+    expect(mutate(path, 'msg.type === "scroll"', 'msg.type === "history"')).toContain("terminal frame type removed: scroll");
+    expect(mutate(path, /msg\.offset/g, "msg.lineOffset")).toContain("terminal scroll field removed: offset");
+    expect(mutate(path, 'msg.type === "keys"', 'msg.type === "key-input"')).toContain("terminal frame type removed: keys");
+    expect(mutate(path, 'msg.type === "text"', 'msg.type === "paste"')).toContain("terminal frame type removed: text");
+  });
+
+  it("detects UI gate and configuration response changes", () => {
+    expect(mutate("packages/daemon/src/server.ts", "deps.enableNodeWebSocket && deps.webUiEnabled === true", "deps.enableNodeWebSocket")).toContain("terminal UI gate removed");
+    expect(mutate("packages/daemon/src/routes/config.ts", 'router.get("/:key",', 'router.get("/changed/:key",')).toContain("route removed in config: router GET /:key");
+    expect(mutate("packages/daemon/src/routes/config.ts", "c.json(store.resolveOne(key))", "c.json({ enabled: true })")).toContain("terminal config resolver changed");
+    expect(mutate("packages/daemon/src/domain/user-settings/settings-store.ts", /"ui.enabled"/g, '"ui.available"')).toContain("terminal ui.enabled setting removed");
+    expect(mutate("packages/daemon/src/domain/user-settings/settings-store.ts", "export interface ResolvedSetting {\n  value:", "export interface ResolvedSetting {\n  settingValue:")).toContain("terminal config field removed: value");
+  });
 
   it("commenting out the events mount fails", () => {
     const problems = mutate("packages/daemon/src/server.ts", 'app.route("/api/events", eventsRoute);', '// app.route("/api/events", eventsRoute);');

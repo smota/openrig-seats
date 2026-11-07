@@ -1,0 +1,22 @@
+{
+  "protocol": {
+    "version": "1.0"
+  },
+  "kinds": [],
+  "extensions": [],
+  "harnesses": [],
+  "features": {
+    "terminal": true
+  },
+  "terminal": {
+    "transport": "websocket",
+    "path": "/terminal/{seatId}",
+    "readOnly": true,
+    "output": "ansi-text",
+    "clientFrames": [
+      "scroll"
+    ],
+    "maxFrameBytes": 262144,
+    "maxViewers": 8
+  }
+}

@@ -6,6 +6,7 @@ import { isLoopbackBind, type GatewayConfig } from "./config.js";
 import { SendAction, sendAction } from "./act.js";
 import { IdempotencyTable } from "./idempotency.js";
 import { createApp } from "./server.js";
+import { TerminalBridge, terminalUpgradeUrl } from "./terminal.js";
 import { Store } from "./store.js";
 
 export interface GatewayOptions {
@@ -32,6 +33,7 @@ export class Gateway {
   private streamsOpened = 0;
   private resets = 0;
   private readonly app;
+  private readonly terminal: TerminalBridge | undefined;
   private readonly sendAction: SendAction | undefined;
   private readonly table: IdempotencyTable | undefined;
 
@@ -42,6 +44,11 @@ export class Gateway {
     const daemonToken = opts.daemonToken ?? (config.daemonTokenFile ? readSecretFile(config.daemonTokenFile, "daemon token") : undefined);
     this.store = new Store(config.tombstoneLimit);
     const daemon = new DaemonClient({ baseUrl: config.daemonUrl, ...(daemonToken ? { token: daemonToken } : {}) });
+    if (config.terminal.enabled) this.terminal = new TerminalBridge({
+      config: config.terminal, daemon, daemonUrl: config.daemonUrl,
+      ...(daemonToken ? { daemonToken } : {}),
+      seats: () => this.store.items("seat") as Array<Record<string, unknown>>,
+    });
     const sendEnabled = config.act.send;
     if (sendEnabled) {
       if (!config.act.sender || !config.act.idempotencyFile) throw new Error("act.send needs act.sender and act.idempotencyFile");
@@ -69,6 +76,7 @@ export class Gateway {
       token,
       capabilities: () => this.capabilities(),
       enabledKinds: () => this.kinds(),
+      ...(this.terminal ? { terminal: (id: string, signal?: AbortSignal) => this.terminal!.authorize(id, signal) } : {}),
       ...(this.sendAction ? { act: (b: unknown) => this.sendAction!.handle(b) } : {}),
       allowedOrigins: config.allowedOrigins,
       allowedHosts: config.allowedHosts,
@@ -89,7 +97,7 @@ export class Gateway {
   }
 
   stats() {
-    return { activeStreams: this.activeStreams, streamsOpened: this.streamsOpened, resets: this.resets, entries: this.store.size(), head: this.store.head(), source: this.source.status() };
+    return { terminalViewers: this.terminal?.activeViewers() ?? 0, activeStreams: this.activeStreams, streamsOpened: this.streamsOpened, resets: this.resets, entries: this.store.size(), head: this.store.head(), source: this.source.status() };
   }
 
   private kinds(): string[] {
@@ -110,14 +118,16 @@ export class Gateway {
     }
     const f = this.source.features();
     const harnesses = [...new Set(this.store.items("seat").map((s) => s.harness).filter((h): h is string => typeof h === "string"))].sort();
+    const terminal = await this.terminal?.enabled() ?? false;
     return {
+      ...(terminal ? { terminal: { transport: "websocket" as const, path: "/terminal/{seatId}" as const, readOnly: true as const, output: "ansi-text" as const, clientFrames: ["scroll" as const], maxFrameBytes: this.opts.config.terminal.maxFrameBytes, maxViewers: this.opts.config.terminal.maxViewers } } : {}),
       protocol: { version: PROTOCOL_VERSION },
       kinds: this.kinds(),
       extensions: [OPENRIG_EXTENSION],
       extensionVersions: { [OPENRIG_EXTENSION]: OPENRIG_EXTENSION_VERSION },
       harnesses,
       ...(this.sendAction ? { actions: [{ kind: "seat", action: sendAction(this.opts.config.act.maxLength) }] } : {}),
-      features: { attention: f.attention, work: f.work, snapshot: true, resume: true, act: this.sendAction !== undefined, terminal: false, "x-openrig.text": this.opts.config.xOpenrig.includeText },
+      features: { attention: f.attention, work: f.work, snapshot: true, resume: true, act: this.sendAction !== undefined, terminal, "x-openrig.text": this.opts.config.xOpenrig.includeText },
     };
   }
 
@@ -132,6 +142,16 @@ export class Gateway {
     this.source.start();
     const server = serve({ fetch: this.app.fetch, hostname: listen.host, port: listen.port });
     this.server = server;
+    if (this.terminal) server.on("upgrade", (req, socket, head) => {
+      this.terminal!.upgrade(req, socket, head, async (signal) => {
+        const url = terminalUpgradeUrl(req.url ?? "/");
+        if (!url) return new Response(null, { status: 404 });
+        const headers = new Headers();
+        for (const [key, value] of Object.entries(req.headers)) if (typeof value === "string" || Array.isArray(value)) headers.set(key, Array.isArray(value) ? value.join(", ") : value);
+        return this.app.fetch(new Request(url, { method: req.method ?? "GET", headers, signal }));
+      });
+    });
+    else server.on("upgrade", (_req, socket) => { socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", () => socket.destroy()); });
     await new Promise<void>((resolve, reject) => {
       server.once("listening", () => resolve());
       server.once("error", reject);
@@ -141,6 +161,7 @@ export class Gateway {
   }
 
   async stop(): Promise<void> {
+    this.terminal?.stop();
     this.table?.close();
     await this.source.stop();
     const server = this.server as (ServerType & { closeAllConnections?: () => void }) | null;

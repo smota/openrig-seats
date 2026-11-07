@@ -14,7 +14,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@openrig-seats/seat-protocol": "*"
+    "@openrig-seats/seat-protocol": "*",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { assertLoopbackUrl } from "@openrig-seats/seat-source-openrig";
+import type { TerminalConfig } from "./terminal.js";
 import { DEFAULT_SEND_MAX_LENGTH, type ActConfig } from "./act.js";
 
 export interface GatewayConfig {
@@ -22,6 +23,7 @@ export interface GatewayConfig {
   tombstoneLimit: number;
   /** Write side. Off by default: with `act.send` unset the gateway is read-only. */
   act: ActConfig;
+  terminal: TerminalConfig;
   /** The `x-openrig` extension. */
   xOpenrig: {
     /** Carry the daemon's free text (error text, prompt reason or summary, hold reason, event summaries). Off by default: sensitive. */
@@ -87,9 +89,20 @@ export function parseConfig(raw: unknown): GatewayConfig {
     maxKeys,
     retentionDays,
   };
+  const t = (r.terminal ?? {}) as Record<string, unknown>;
+  if (typeof t !== "object" || t === null || Array.isArray(t)) throw new Error("config.terminal must be an object");
+  if (t.enabled !== undefined && typeof t.enabled !== "boolean") throw new Error("config.terminal.enabled must be a boolean");
+  if (t.principal !== undefined && (typeof t.principal !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/.test(t.principal))) throw new Error("config.terminal.principal must look like name@rig");
+  if (t.enabled === true && t.principal === undefined) throw new Error("config.terminal.principal is required when terminal.enabled is true");
+  const maxViewers = t.maxViewers ?? 8;
+  const maxFrameBytes = t.maxFrameBytes ?? 262144;
+  if (typeof maxViewers !== "number" || !Number.isInteger(maxViewers) || maxViewers < 1 || maxViewers > 1024) throw new Error("config.terminal.maxViewers must be an integer 1-1024");
+  if (typeof maxFrameBytes !== "number" || !Number.isInteger(maxFrameBytes) || maxFrameBytes < 128 || maxFrameBytes > 1048576) throw new Error("config.terminal.maxFrameBytes must be an integer 128-1048576");
+  const terminal: TerminalConfig = { enabled: t.enabled === true, ...(typeof t.principal === "string" ? { principal: t.principal } : {}), maxViewers, maxFrameBytes };
   return {
     daemonUrl,
     act,
+    terminal,
     ...(typeof r.daemonTokenFile === "string" ? { daemonTokenFile: expandHome(r.daemonTokenFile) } : {}),
     tokenFile: expandHome(str("tokenFile")),
     listen: { host, port },

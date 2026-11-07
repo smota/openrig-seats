@@ -16,6 +16,7 @@ export interface AppOptions {
   allowedHosts?: string[];
   /** Present only when the write side is enabled: serves POST /act. */
   act?: (body: unknown) => Promise<{ httpStatus: number; response: unknown }>;
+  terminal?: (id: string, signal?: AbortSignal) => Promise<{ status: number; session?: string }>;
   /** SSE comment interval. Default 15000. */
   heartbeatMs?: number;
   /** A client that accepts no bytes for this long is dropped. Default 30000. */
@@ -78,6 +79,13 @@ export function createApp(opts: AppOptions): Hono {
       return c.json(r.response, r.httpStatus as 200);
     });
   }
+
+  if (opts.terminal) app.get("/terminal/:seatId", async (c) => {
+    const result = await opts.terminal!(c.req.param("seatId"), c.req.raw.signal);
+    if (result.status !== 204 || !result.session) return c.json({ error: "terminal_unavailable" }, result.status as 404);
+    if (c.req.header("upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "websocket_required" }, 426);
+    return new Response(null, { status: 204, headers: { "x-seat-terminal-session": result.session } });
+  });
 
   app.get("/capabilities", async (c) => c.json(await opts.capabilities()));
 

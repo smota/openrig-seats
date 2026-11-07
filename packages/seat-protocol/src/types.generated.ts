@@ -417,6 +417,33 @@ message: string
 }
 /**
  * This interface was referenced by `SeatProtocol`'s JSON-Schema
+ * via the `definition` "Terminal".
+ */
+export interface Terminal {
+transport: "websocket"
+path: "/terminal/{seatId}"
+readOnly: true
+output: "ansi-text"
+/**
+ * @minItems 1
+ * @maxItems 1
+ */
+clientFrames: ["scroll"]
+maxFrameBytes: number
+maxViewers: number
+[k: string]: unknown
+}
+/**
+ * This interface was referenced by `SeatProtocol`'s JSON-Schema
+ * via the `definition` "TerminalScroll".
+ */
+export interface TerminalScroll {
+type: "scroll"
+offset: number
+[k: string]: unknown
+}
+/**
+ * This interface was referenced by `SeatProtocol`'s JSON-Schema
  * via the `definition` "Capabilities".
  */
 export interface Capabilities {
@@ -453,12 +480,30 @@ kind: string
 action: Action
 [k: string]: unknown
 }[]
+terminal?: Terminal1
 /**
  * Optional features, for example terminal.
  */
 features: {
 [k: string]: boolean
 }
+[k: string]: unknown
+}
+/**
+ * Present only when features.terminal is true. Read-only WebSocket terminal view.
+ */
+export interface Terminal1 {
+transport: "websocket"
+path: "/terminal/{seatId}"
+readOnly: true
+output: "ansi-text"
+/**
+ * @minItems 1
+ * @maxItems 1
+ */
+clientFrames: ["scroll"]
+maxFrameBytes: number
+maxViewers: number
 [k: string]: unknown
 }
 /**

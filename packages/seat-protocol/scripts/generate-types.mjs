@@ -11,7 +11,7 @@ const outFile = join(root, "src/types.generated.ts");
 const NAMES = {
   host: "Host", rig: "Rig", seat: "Seat", turn: "Turn", attention: "Attention", work: "Work",
   action: "DeclaredAction", "act-request": "ActRequest", "act-response": "ActResponse",
-  capabilities: "Capabilities", "stream-envelope": "StreamEnvelope", "stream-control": "StreamControl",
+  terminal: "Terminal", "terminal-scroll": "TerminalScroll", capabilities: "Capabilities", "stream-envelope": "StreamEnvelope", "stream-control": "StreamControl",
   "x-openrig-seat": "XOpenrigSeat", "x-openrig-event": "XOpenrigEvent",
 };
 
