@@ -1,0 +1,11 @@
+{
+  "scope": "instance",
+  "readAt": "2026-11-07T12:00:00.000Z",
+  "items": [
+    { "id": "queue:q-100", "kind": "action", "summary": "Approve the release notes", "unblocks": "The weekly release", "urgency": "urgent", "at": "2026-11-07T11:30:00.000Z", "scope": "instance", "project": null, "source": "/api/queue/q-100", "recipient": "human@acme", "asker": "dev-writer@acme-ops" },
+    { "id": "queue-update:q-101", "kind": "update", "summary": "Nightly run finished", "unblocks": null, "urgency": "routine", "at": "2026-11-07T11:45:00.000Z", "scope": "instance", "project": null, "source": "/api/queue/q-101", "recipient": "human@acme" }
+  ],
+  "sources": [ { "source": "queue", "state": "available", "detail": "ok" } ],
+  "detail": null,
+  "detailError": null
+}

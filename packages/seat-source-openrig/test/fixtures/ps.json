@@ -1,0 +1,4 @@
+[
+  { "rigId": "rig-acme-1", "name": "acme-ops", "rigName": "acme-ops", "nodeCount": 3, "runningCount": 2, "activeCount": 1, "hasWorkCount": 1, "status": "partial", "lifecycleState": "degraded", "uptime": "2h", "latestSnapshot": null, "archivedAt": null, "isArchived": false, "attentionCount": 1 },
+  { "rigId": "rig-acme-2", "name": "acme-build", "rigName": "acme-build", "nodeCount": 1, "runningCount": 1, "activeCount": 0, "hasWorkCount": 0, "status": "running", "lifecycleState": "running", "uptime": "5m", "latestSnapshot": null, "archivedAt": null, "isArchived": false, "attentionCount": 0 }
+]

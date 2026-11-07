@@ -1,4 +1,4 @@
-import type { StreamEnvelope } from "./types.generated.js";
+import type { StreamControl, StreamEnvelope } from "./types.generated.js";
 
 export const CORE_KINDS = ["host", "rig", "seat", "turn", "attention", "work"] as const;
 export type CoreKind = (typeof CORE_KINDS)[number];
@@ -40,11 +40,30 @@ export function toGenericCard(envelope: { kind: string; id: string; data?: unkno
   };
 }
 
+/** What GET /stream yields: envelopes, and control messages such as `reset`. */
+export type StreamItem = StreamEnvelope | StreamControl;
+
+/** A control message has `type` and no `kind`; envelopes always have `kind`. */
+export function isStreamControl(item: StreamItem): item is StreamControl {
+  return typeof (item as { type?: unknown }).type === "string" && (item as { kind?: unknown }).kind === undefined;
+}
+
 /** Minimal in-memory mirror of the stream: upsert replaces, delete removes, unknown kinds are kept. */
 export class Mirror {
   private readonly items = new Map<string, Map<string, Record<string, unknown>>>();
 
-  apply(envelope: Pick<StreamEnvelope, "kind" | "id" | "op" | "data">): void {
+  /** Forgets everything held. Applied before the replay that follows a `reset`. */
+  clear(): void {
+    this.items.clear();
+  }
+
+  /** A `reset` control message clears the mirror; other control types are ignored. */
+  apply(envelope: Pick<StreamEnvelope, "kind" | "id" | "op" | "data"> | StreamControl): void {
+    if (isStreamControl(envelope as StreamItem)) {
+      if ((envelope as StreamControl).type === "reset") this.clear();
+      return;
+    }
+    envelope = envelope as Pick<StreamEnvelope, "kind" | "id" | "op" | "data">;
     let byId = this.items.get(envelope.kind);
     if (envelope.op === "delete") {
       byId?.delete(envelope.id);

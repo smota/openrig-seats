@@ -1,0 +1,5 @@
+[
+  { "qitemId": "q-100", "tsCreated": "2026-11-07T11:00:00.000Z", "tsUpdated": "2026-11-07T11:30:00.000Z", "sourceSession": "dev-writer@acme-ops", "destinationSession": "human@acme", "state": "pending", "priority": "urgent", "tier": null, "tags": null, "blockedOn": null, "body": "Approve the release notes\nDetails follow.", "summary": "Approve the release notes" },
+  { "qitemId": "q-200", "tsCreated": "2026-11-07T10:00:00.000Z", "tsUpdated": "2026-11-07T10:05:00.000Z", "sourceSession": "lead-planner@acme-ops", "destinationSession": "dev-builder@acme-build", "state": "in-progress", "priority": "routine", "tier": null, "tags": null, "blockedOn": null, "body": "Build the thing" },
+  { "qitemId": "q-300", "tsCreated": "2026-11-06T10:00:00.000Z", "tsUpdated": "2026-11-06T10:05:00.000Z", "sourceSession": "lead-planner@acme-ops", "destinationSession": "dev-writer@acme-ops", "state": "done", "priority": "routine", "tier": null, "tags": null, "blockedOn": null, "body": "Old closed item" }
+]

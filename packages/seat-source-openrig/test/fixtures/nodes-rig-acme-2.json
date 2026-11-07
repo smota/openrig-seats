@@ -1,0 +1,3 @@
+[
+  { "nodeId": "node-b1", "rigId": "rig-acme-2", "rigName": "acme-build", "logicalId": "dev.builder", "canonicalSessionName": "dev-builder@acme-build", "nodeKind": "agent", "runtime": "claude-code", "sessionStatus": "running", "lifecycleState": "running", "agentActivity": { "state": "idle", "reason": "waiting for the next task", "evidenceSource": "terminal_activity", "sampledAt": "2026-11-07T12:00:00.000Z", "evidence": null }, "modelObservation": { "generation": "gen-010" } }
+]

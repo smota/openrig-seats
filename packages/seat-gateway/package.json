@@ -1,0 +1,31 @@
+{
+  "name": "@openrig-seats/seat-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only seat gateway: serves the seat protocol (capabilities, stream, snapshot) from an OpenRig daemon",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": { "seat-gateway": "dist/main.js" },
+  "scripts": {
+    "build": "tsc",
+    "check": "npm run build -w @openrig-seats/seat-protocol && npm run build -w @openrig-seats/seat-source-openrig && tsc --noEmit -p tsconfig.check.json",
+    "pretest": "npm run build -w @openrig-seats/seat-protocol && npm run build -w @openrig-seats/seat-source-openrig && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@openrig-seats/seat-protocol": "*",
+    "@openrig-seats/seat-source-openrig": "*",
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

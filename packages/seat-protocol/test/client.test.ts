@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Mirror, SeatClientError, createSeatClient, isCoreKind, toGenericCard, type StreamEnvelope } from "../src/index.js";
+import { Mirror, SeatClientError, createSeatClient, isCoreKind, isStreamControl, toGenericCard, type StreamEnvelope, type StreamItem } from "../src/index.js";
 import { MockSeatServer } from "./mock-server.js";
 
 const T = "2026-11-07T12:00:00Z";
@@ -11,9 +11,10 @@ afterEach(async () => { await server.stop(); });
 
 const noSleep = async () => {};
 
-async function take(it: AsyncGenerator<StreamEnvelope>, n: number, ctl: AbortController): Promise<StreamEnvelope[]> {
+async function take(it: AsyncGenerator<StreamItem>, n: number, ctl: AbortController): Promise<StreamEnvelope[]> {
   const out: StreamEnvelope[] = [];
   for await (const e of it) {
+    if (isStreamControl(e)) continue;
     out.push(e);
     if (out.length === n) ctl.abort();
   }
@@ -233,5 +234,76 @@ describe("kinds and mirror", () => {
     m.apply({ kind: "seat", id: "a", op: "delete" });
     expect(m.list("seat")).toEqual([]);
     expect(m.kinds()).toEqual(["x-acme.thing"]);
+  });
+});
+
+describe("reset control message", () => {
+  const ctrl = (reason: string) => `event: control\ndata: ${JSON.stringify({ type: "reset", reason })}\n\n`;
+
+  it("surfaces reset through onReset and as a yielded item, and drops the cursor", async () => {
+    server.push(seat("a"));
+    const ctl = new AbortController();
+    const resets: unknown[] = [];
+    const items: StreamItem[] = [];
+    const c = createSeatClient({ baseUrl: server.url, minDelayMs: 1 });
+    const done = (async () => {
+      for await (const it of c.stream({ signal: ctl.signal, onReset: (r) => resets.push(r) })) items.push(it);
+    })();
+    await new Promise((r) => setTimeout(r, 50));
+    server.raw(ctrl("cursor-pruned"));
+    
+    await new Promise((r) => setTimeout(r, 50));
+    ctl.abort();
+    await done;
+    expect(resets).toEqual([{ type: "reset", reason: "cursor-pruned" }]);
+    expect(items.some((i) => isStreamControl(i) && i.type === "reset")).toBe(true);
+  });
+
+  it("reconnects without the old cursor after a reset", async () => {
+    server.push(seat("a"));
+    const ctl = new AbortController();
+    const c = createSeatClient({ baseUrl: server.url, minDelayMs: 1 });
+    const done = (async () => {
+      for await (const _ of c.stream({ signal: ctl.signal })) void _;
+    })();
+    await new Promise((r) => setTimeout(r, 50));
+    server.raw(ctrl("cursor-unknown"));
+    await new Promise((r) => setTimeout(r, 30));
+    server.dropStreams();
+    await new Promise((r) => setTimeout(r, 80));
+    ctl.abort();
+    await done;
+    expect(server.streamRequests.at(-1)?.lastEventId).toBeUndefined();
+  });
+
+  it("ignores control types it does not know and malformed control data", async () => {
+    server.push(seat("a"));
+    const ctl = new AbortController();
+    const skipped: string[] = [];
+    const items: StreamItem[] = [];
+    const c = createSeatClient({ baseUrl: server.url });
+    const done = (async () => {
+      for await (const it of c.stream({ signal: ctl.signal, onSkipped: (r) => skipped.push(r) })) items.push(it);
+    })();
+    await new Promise((r) => setTimeout(r, 50));
+    server.raw('event: control\ndata: {"type":"x-acme.notice"}\n\n');
+    server.raw("event: control\ndata: nope\n\n");
+    await new Promise((r) => setTimeout(r, 50));
+    ctl.abort();
+    await done;
+    expect(items.filter(isStreamControl)).toEqual([]);
+    expect(skipped).toEqual(["invalid JSON"]);
+  });
+
+  it("Mirror.clear and a reset item empty the mirror; other controls do not", () => {
+    const m = new Mirror();
+    m.apply({ kind: "seat", id: "a", op: "upsert", data: { id: "a" } });
+    m.apply({ type: "x-acme.notice" });
+    expect(m.list("seat")).toHaveLength(1);
+    m.apply({ type: "reset", reason: "cursor-unknown" });
+    expect(m.kinds()).toEqual([]);
+    m.apply({ kind: "seat", id: "b", op: "upsert", data: { id: "b" } });
+    m.clear();
+    expect(m.list("seat")).toEqual([]);
   });
 });
