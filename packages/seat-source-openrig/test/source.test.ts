@@ -270,6 +270,20 @@ describe("features", () => {
     expect(source.status().seatsSynced).toBe(true);
   });
 
+  it("seatsSynced stays false while attention/queue are still awaited and is set with the publish", async () => {
+    let release!: () => void;
+    daemon.holdAttention = new Promise<void>((r) => (release = r));
+    make();
+    const done = source.resync();
+    await waitFor(() => daemon.requests.some((r) => r.path === "/api/attention"));
+    expect(source.status().seatsSynced).toBe(false);
+    expect(source.current("seat")).toHaveLength(0);
+    release();
+    await done;
+    expect(source.status().seatsSynced).toBe(true);
+    expect(source.current("seat").length).toBeGreaterThan(0);
+  });
+
   it("a 500 is an outage, not a missing feature", async () => {
     daemon.broken.add("/api/attention");
     make();

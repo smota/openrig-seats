@@ -55,6 +55,8 @@ export class MockDaemon {
   missing = new Set<string>();
   /** Path prefixes answered with 500. */
   broken = new Set<string>();
+  /** When set, GET /api/attention waits for this promise (holds a resync open between nodes and publish). */
+  holdAttention: Promise<void> | undefined;
   readonly requests: RecordedRequest[] = [];
   log: Array<{ seq: number } & Record<string, unknown>> = [];
   nextSeq = 1;
@@ -176,7 +178,10 @@ export class MockDaemon {
       const list = this.nodes.get(decodeURIComponent(nodes[1]!));
       return list ? json(200, list) : json(404, { error: "rig not found" });
     }
-    if (p === "/api/attention") return json(200, this.attention);
+    if (p === "/api/attention") {
+      if (this.holdAttention) { void this.holdAttention.then(() => json(200, this.attention)); return; }
+      return json(200, this.attention);
+    }
     if (p === "/api/queue/list") {
       const active = url.searchParams.get("activeOnly") === "1";
       const limit = Number(url.searchParams.get("limit") ?? 1000);

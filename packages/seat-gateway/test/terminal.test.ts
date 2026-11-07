@@ -112,9 +112,9 @@ describe("terminal bridge without network", () => {
       h.upstream.emit("open");
       expect(h.upstream.sent).toEqual(['{"type":"scroll","offset":2}']);
       h.upstream.bufferedAmount = 128;
-      h.upstream.emit("message", Buffer.from("out"), false);
       h.downstream.emit("message", Buffer.from('{"type":"scroll","offset":0}'), false);
       await vi.advanceTimersByTimeAsync(150);
+      h.upstream.emit("message", Buffer.from("out"), false); // 150 ms after the send: releases the slot
       expect(h.bridge.activeViewers()).toBe(0);
     } finally { h.bridge.stop(); vi.useRealTimers(); }
   });
@@ -133,8 +133,11 @@ describe("terminal bridge without network", () => {
       h.upstream.emit("message", Buffer.from("o"), false);
       expect(h.upstream.sent.length).toBe(2); // output inside the 150 ms window does not release the slot
       await vi.advanceTimersByTimeAsync(149);
-      expect(h.upstream.sent.length).toBe(2);
+      h.upstream.emit("message", Buffer.from("o"), false);
+      expect(h.upstream.sent.length).toBe(2); // earlier output is ignored, not deferred
       await vi.advanceTimersByTimeAsync(1);
+      expect(h.upstream.sent.length).toBe(2); // no timer-based release at 150 ms
+      h.upstream.emit("message", Buffer.from("o"), false);
       expect(h.upstream.sent.at(-1)).toBe('{"type":"scroll","offset":8}');
       expect(h.upstream.sent.length).toBe(3);
       h.downstream.emit("message", Buffer.from('{"type":"scroll","offset":9}'), false);

@@ -141,14 +141,10 @@ export class TerminalBridge {
             inFlight = false;
             if (releaseTimer) { clearTimeout(releaseTimer); scrollTimers.delete(releaseTimer); releaseTimer = undefined; }
           };
-          // Output releases the slot only once SCROLL_MIN_RELEASE_MS have passed since the send, so a busy pane
-          // cannot turn every output frame into another capture.
-          let releaseAtTimer: NodeJS.Timeout | undefined;
+          // Only an output frame arriving at least SCROLL_MIN_RELEASE_MS after the send releases the slot (earlier output
+          // is ignored), so a busy pane cannot turn every output frame into another capture. Otherwise the 2 s timeout.
           const onOutput = () => {
-            if (!inFlight) return;
-            const wait = lastSentAt + SCROLL_MIN_RELEASE_MS - Date.now();
-            if (wait <= 0) { release(); pump(); return; }
-            if (!releaseAtTimer) releaseAtTimer = later(() => { releaseAtTimer = undefined; release(); pump(); }, wait);
+            if (inFlight && Date.now() - lastSentAt >= SCROLL_MIN_RELEASE_MS) { release(); pump(); }
           };
           daemon.on("open", () => {
             clearTimeout(timer);

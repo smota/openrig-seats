@@ -190,11 +190,12 @@ export class OpenRigSource {
     this.resyncs++;
     await this.refreshPs(signal);
     if (this.feat.seat && this.feat.rig) await this.refreshNodes([...this.psIds()], signal);
-    this.seatsSynced = true; // reached only when ps and every rig's nodes were read without a failure
     if (this.feat.attention) await this.refreshAttention(signal);
     if (this.feat.work) await this.refreshQueue(signal);
     this.markOnline();
     this.publish();
+    // Only after the complete projection is in the store (same tick): every await above can still throw.
+    this.seatsSynced = true;
   }
 
   // ---- main loop ----
