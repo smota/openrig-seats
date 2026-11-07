@@ -12,6 +12,7 @@
     "state": { "enum": ["active", "idle", "needs-input", "blocked", "stopped", "unknown"] },
     "activity": { "type": "string", "description": "One line on what the seat is doing now." },
     "generationId": { "type": "string", "description": "Identity of the seat's current conversation record; a change starts a new conversation segment." },
-    "attentionIds": { "type": "array", "items": { "$ref": "common.v1.schema.json#/$defs/id" } }
+    "attentionIds": { "type": "array", "items": { "$ref": "common.v1.schema.json#/$defs/id" } },
+    "x-openrig": { "$ref": "x-openrig-seat.v1.schema.json", "description": "Optional OpenRig-specific detail (extension x-openrig). Ignore if unknown." }
   }
 }

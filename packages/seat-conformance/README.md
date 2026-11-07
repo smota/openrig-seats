@@ -3,7 +3,7 @@
 Static snapshot of the OpenRig daemon surfaces the seat gateway depends on, extracted from OpenRig
 source: route mounts and registrations (events SSE with `Last-Event-ID`, attention, ps, rigs and
 nodes, queue `list` and `open-human-updates`, `transport/send`, sessions `generation-record`), the
-`transport/send` outcome set and failure-reason to HTTP-status map, and the `RigEvent` variant names.
+`transport/send` outcome set and failure-reason to HTTP-status map, the `RigEvent` variant names, and the node fields (`NodeInventoryEntry`, `activityState`, `needsInput`, `AgentActivity`) and event fields the `x-openrig` extension reads (`REQUIRED_NODE_FIELDS`, `REQUIRED_EVENT_FIELDS`).
 
 - `snapshots/openrig-surfaces.json` is checked in and was extracted at the commit in `/openrig-compat.json`.
 - `OPENRIG_CHECKOUT=<path> npm test` re-extracts from a read-only OpenRig checkout at the commit in

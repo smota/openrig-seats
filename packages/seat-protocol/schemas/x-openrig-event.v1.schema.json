@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/x-openrig-event.v1.schema.json",
+  "title": "Seat protocol v1: x-openrig.event",
+  "description": "Data of the extension kind `x-openrig.event`: a hand-off, answer, claim, close, message or prompt seen on the daemon event stream. Only identifiers and a summary: never a message body. By default `summary` is built from fixed metadata (event type and work id); with the gateway's text opt-in (capabilities.features['x-openrig.text']) it is the daemon's own short text, which is sensitive and UNTRUSTED. One line, at most 140 characters. `answer` is part of the vocabulary but the OpenRig event stream carries no authoritative answer marker, so this source emits `close`. A reader that does not know the kind draws it as a generic card (title, summary).",
+  "allOf": [{ "$ref": "common.v1.schema.json#/$defs/entity" }],
+  "type": "object",
+  "required": ["id", "updatedAt", "eventType", "seq"],
+  "properties": {
+    "eventType": { "enum": ["message", "claim", "handoff", "answer", "close", "prompt"] },
+    "daemonEvent": { "type": "string", "description": "The daemon's RigEvent type this came from, for example queue.handed_off." },
+    "seq": { "type": "integer", "minimum": 0, "description": "The daemon's event sequence number." },
+    "summary": { "type": "string", "maxLength": 140 },
+    "fromSession": { "type": "string" },
+    "toSession": { "type": "string" },
+    "fromSeatId": { "$ref": "common.v1.schema.json#/$defs/id" },
+    "toSeatId": { "$ref": "common.v1.schema.json#/$defs/id" },
+    "workId": { "$ref": "common.v1.schema.json#/$defs/id" }
+  }
+}

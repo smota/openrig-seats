@@ -100,11 +100,11 @@ export class DaemonClient {
   }
 
   /**
-   * Opens the events stream. Always `replay=0`; with `lastSeq` it also sends Last-Event-ID so the daemon
-   * replays what was missed. Yields until the connection ends; the caller decides what a gap means.
+   * Opens the events stream. `replay` is always sent: the budget (newest N daemon events, all types) on a cold
+   * start, 0 when resuming with `lastSeq`, which also sends Last-Event-ID so the daemon replays what was missed. Yields until the connection ends; the caller decides what a gap means.
    */
-  async *events(opts: { lastSeq?: number | null; signal?: AbortSignal; onOpen?: () => void } = {}): AsyncGenerator<DaemonEvent> {
-    const res = await this.f(this.base + ROUTES.events, {
+  async *events(opts: { lastSeq?: number | null; replay?: number; signal?: AbortSignal; onOpen?: () => void } = {}): AsyncGenerator<DaemonEvent> {
+    const res = await this.f(this.base + ROUTES.events(opts.lastSeq !== null && opts.lastSeq !== undefined ? 0 : Math.max(0, Math.floor(opts.replay ?? 0))), {
       method: "GET",
       redirect: "error",
       headers: this.headers({

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smota.github.io/openrig-seats/schemas/x-openrig-seat.v1.schema.json",
+  "title": "Seat protocol v1: x-openrig seat extension",
+  "description": "Value of the `x-openrig` field on a seat: what the OpenRig daemon reports about a seat beyond the core fields. Ignorable by clients that do not know it. By default only structured fields are carried: held, heldReasonCode, errorCategory and promptKind come from allowlists, never from daemon free text. The free-text fields (heldReason, lastError, promptSummary) are present only when the gateway operator opted in (capabilities.features['x-openrig.text']); they are SENSITIVE and UNTRUSTED (the daemon may put message content or credentials in them): one line, at most 300 characters. Render as text only.",
+  "type": "object",
+  "required": ["version"],
+  "properties": {
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$", "description": "Version of this extension, major.minor; the same value capabilities.extensionVersions['x-openrig'] advertises." },
+    "sessionName": { "type": "string", "description": "Daemon canonicalSessionName." },
+    "rigName": { "type": "string", "description": "Daemon rigName." },
+    "podNamespace": { "type": "string", "description": "Daemon podNamespace." },
+    "sessionStatus": { "type": "string", "description": "Daemon sessionStatus, for example running or detached." },
+    "lifecycleState": { "type": "string", "description": "Daemon lifecycleState." },
+    "startupStatus": { "enum": ["pending", "ready", "attention_required", "failed"] },
+    "intentionallyStopped": { "type": "boolean" },
+    "needsAttention": { "type": "boolean" },
+    "arbitratedNeedsInput": { "type": "boolean", "description": "Present only when the daemon gave an authoritative answer (not null)." },
+    "activity": { "type": "string", "description": "Daemon activityState.activity." },
+    "display": { "type": "string", "description": "Daemon activityState.display." },
+    "needsInputCount": { "type": "integer", "minimum": 0 },
+    "held": { "type": "boolean", "description": "True when the daemon holds this seat's messages (node.heldReason is set)." },
+    "heldReasonCode": { "enum": ["excluded_from_subset", "other"], "description": "Allowlisted hold reason; anything else is other." },
+    "errorCategory": { "enum": ["startup_failed", "launch_unconfirmed", "unknown"], "description": "Derived from startupStatus and known daemon error prefixes, else unknown. Present when the seat has an error." },
+    "promptKind": { "enum": ["permission_prompt", "selection_prompt", "other"], "description": "Allowlisted kind of the prompt the seat waits on." },
+    "heldReason": { "type": "string", "maxLength": 300, "description": "Opt-in text: node.heldReason. Sensitive, untrusted." },
+    "lastError": { "type": "string", "maxLength": 300, "description": "Opt-in text: node.latestError. Sensitive, untrusted." },
+    "promptSummary": { "type": "string", "maxLength": 300, "description": "Opt-in text: activityState.needsInput summary, else reason. Sensitive, untrusted." },
+    "pendingWorkCount": { "type": "integer", "minimum": 0 },
+    "inProgressWorkCount": { "type": "integer", "minimum": 0 }
+  }
+}

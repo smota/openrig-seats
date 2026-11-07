@@ -109,7 +109,10 @@ describe("capabilities and snapshot", () => {
     const caps = await (await get("/capabilities")).json();
     validate("capabilities", caps);
     expect(caps.protocol.version).toBe("1.0");
-    expect(caps.kinds).toEqual(["host", "rig", "seat", "attention", "work"]);
+    expect(caps.kinds).toEqual(["host", "rig", "seat", "attention", "work", "x-openrig.event"]);
+    expect(caps.extensions).toEqual(["x-openrig"]);
+    expect(caps.extensionVersions).toEqual({ "x-openrig": "1.0" });
+    expect(caps.features["x-openrig.text"]).toBe(false);
     expect(caps.harnesses).toEqual(["agy", "claude-code", "codex"]);
     expect(caps.features).toMatchObject({ act: false, terminal: false, attention: true, work: true, resume: true });
   });
@@ -145,7 +148,7 @@ describe("capabilities and snapshot", () => {
     }
     expect((await (await get("/snapshot?kind=rig")).json()).items).toHaveLength(2);
     const all = await (await get("/snapshot")).json();
-    expect(Object.keys(all.kinds).sort()).toEqual(["attention", "host", "rig", "seat", "work"]);
+    expect(Object.keys(all.kinds).sort()).toEqual(["attention", "host", "rig", "seat", "work", "x-openrig.event"]);
     expect((await get("/snapshot/turn")).status).toBe(404);
     expect((await get("/snapshot/bogus")).status).toBe(404);
   });
@@ -249,5 +252,67 @@ describe("stream", () => {
     await waitFor(() => mirror.list("host")[0]?.state === "online");
     ctl.abort();
     await done;
+  });
+});
+
+describe("x-openrig text opt-in", () => {
+  it("is off by default and on with config.xOpenrig.includeText, advertised in capabilities", async () => {
+    daemon.nodes.get("rig-acme-1")![0]!.latestError = "disk exploded";
+    gw = await startGateway(daemon, {}, { xOpenrig: { includeText: true, replay: 5 } });
+    await waitFor(() => gw.gateway.store.items("seat").length === 4);
+    expect((await (await get("/capabilities")).json()).features["x-openrig.text"]).toBe(true);
+    const seat = (await (await get("/snapshot/seat")).json()).items.find((s: { id: string }) => s.id === "node-a1");
+    expect(seat["x-openrig"].lastError).toBe("disk exploded");
+    expect(daemon.requests.find((r) => r.path === "/api/events")!.query).toBe("?replay=5");
+  });
+});
+
+describe("x-openrig extension", () => {
+  it("serves seat detail and x-openrig.event items in the stream and the snapshots", async () => {
+    daemon.nodes.get("rig-acme-1")![0]!.heldReason = "excluded_from_subset";
+    gw = await startGateway(daemon);
+    await waitFor(() => gw.gateway.store.items("seat").length === 4);
+    const seat = (await (await get("/snapshot/seat")).json()).items.find((s: { id: string }) => s.id === "node-a1");
+    expect(seat["x-openrig"]).toMatchObject({ version: "1.0", held: true, heldReasonCode: "excluded_from_subset" });
+    daemon.emit({ type: "queue.handed_off", qitemId: "q-100", fromSession: "lead-planner@acme-ops", toSession: "dev-writer@acme-ops", closureReason: "handed_off_to", summary: "Review notes" });
+    await waitFor(() => gw.gateway.store.items("x-openrig.event").length === 1);
+    const one = await (await get("/snapshot/x-openrig.event")).json();
+    validate("x-openrig-event", one.items[0]);
+    expect(one.items[0]).toMatchObject({ eventType: "handoff", fromSeatId: "node-a1", toSeatId: "node-a2" });
+    const all = await (await get("/snapshot")).json();
+    expect(Object.keys(all.kinds)).toContain("x-openrig.event");
+  });
+});
+
+describe("no daemon free text with includeText off", () => {
+  it("never reaches a snapshot or a stream envelope, in any kind or field", async () => {
+    const S = "SENTINEL-FREE-TEXT-9f3a";
+    for (const list of daemon.nodes.values()) {
+      for (const n of list) {
+        Object.assign(n, {
+          heldReason: S, latestError: `${S} error`, transcript: S, body: S, startedWithoutRequired: [S], tmuxAttachCommand: S, resumeCommand: S, cwd: S,
+          agentActivity: { state: "needs_input", reason: `${S} activity`, evidenceSource: "x", sampledAt: "2026-11-07T12:00:00.000Z", evidence: S },
+          activityState: { activity: "needs-input", display: "needs input", needsInput: { count: 1, reason: `${S} reason`, summary: `${S} summary`, prompt: `${S} prompt` }, decidedBy: S, seq: 1, lastSwap: null },
+        });
+      }
+    }
+    daemon.attention = { ...daemon.attention, detail: S, detailError: S, items: (daemon.attention.items as Array<Record<string, unknown>>).map((i) => ({ ...i, summary: S, unblocks: S, body: S, project: S, source: S })) };
+    daemon.queue = daemon.queue.map((q) => ({ ...q, summary: S, body: S, blockedOn: S, tags: [S], closureTarget: S }));
+    gw = await startGateway(daemon);
+    await waitFor(() => gw.gateway.store.items("work").length === 2 && gw.gateway.store.items("attention").length === 2);
+    const ev = { qitemId: "q-100", sourceSession: "lead-planner@acme-ops", destinationSession: "dev-writer@acme-ops", fromSession: "lead-planner@acme-ops", toSession: "dev-writer@acme-ops", actorSession: "dev-writer@acme-ops", summary: S, body: S, reason: S, closureReason: "no-follow-on", closureTarget: S };
+    daemon.emit({ ...ev, type: "queue.created", priority: "routine", tier: null });
+    daemon.emit({ ...ev, type: "queue.claimed", claimedAt: S, closureRequiredAt: null });
+    daemon.emit({ ...ev, type: "queue.handed_off" });
+    daemon.emit({ ...ev, type: "queue.updated", fromState: "pending", toState: "done" });
+    daemon.emit({ type: "agent.activity", rigId: "rig-acme-1", nodeId: "node-a2", sessionName: "dev-writer@acme-ops", runtime: "codex", activity: { state: "needs_input", reason: `${S} prompt`, evidence: S } });
+    await waitFor(() => gw.gateway.store.items("x-openrig.event").length >= 4, 4000, "events");
+    const snapshots = JSON.stringify(await (await get("/snapshot")).json());
+    const frames = await readFrames(await get("/stream"), (f) => f.filter((x) => x.id).length >= gw.gateway.store.size());
+    const stream = frames.map((f) => f.data).join("\n");
+    expect(stream.length).toBeGreaterThan(1000);
+    expect(snapshots).not.toContain(S);
+    expect(stream).not.toContain(S);
+    expect(snapshots).not.toContain("transcript");
   });
 });

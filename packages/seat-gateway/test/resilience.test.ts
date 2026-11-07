@@ -118,7 +118,7 @@ describe("gateway restart", () => {
 
 describe("slow and stalled clients", () => {
   it("a slow client does not slow the others, queues nothing, and converges when it catches up", async () => {
-    gw = await startGateway(daemon);
+    gw = await startGateway(daemon, {}, { xOpenrig: { includeText: true } });
     await waitFor(() => gw!.gateway.store.items("work").length === 2);
     const fast = follow(gw.url);
     await waitFor(() => fast.mirror.list("work").length === 2);

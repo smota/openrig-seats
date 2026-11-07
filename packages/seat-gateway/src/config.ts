@@ -19,6 +19,13 @@ export interface GatewayConfig {
   hostId: string;
   hostName: string;
   tombstoneLimit: number;
+  /** The `x-openrig` extension. */
+  xOpenrig: {
+    /** Carry the daemon's free text (error text, prompt reason or summary, hold reason, event summaries). Off by default: sensitive. */
+    includeText: boolean;
+    /** Events asked of the daemon on a cold start; the budget counts ALL daemon event types. Default 2000. */
+    replay: number;
+  };
 }
 
 /** A leading ~/ means the home directory of the user running the gateway. */
@@ -50,6 +57,11 @@ export function parseConfig(raw: unknown): GatewayConfig {
   assertLoopbackUrl(daemonUrl);
   const tombstoneLimit = r.tombstoneLimit === undefined ? 5000 : r.tombstoneLimit;
   if (typeof tombstoneLimit !== "number" || !Number.isInteger(tombstoneLimit) || tombstoneLimit < 0) throw new Error("config.tombstoneLimit must be a non-negative integer");
+  const x = (r.xOpenrig ?? {}) as Record<string, unknown>;
+  if (typeof x !== "object" || x === null || Array.isArray(x)) throw new Error("config.xOpenrig must be an object");
+  if (x.includeText !== undefined && typeof x.includeText !== "boolean") throw new Error("config.xOpenrig.includeText must be a boolean");
+  const replay = x.replay === undefined ? 2000 : x.replay;
+  if (typeof replay !== "number" || !Number.isInteger(replay) || replay < 0 || replay > 100_000) throw new Error("config.xOpenrig.replay must be an integer 0-100000");
   return {
     daemonUrl,
     ...(typeof r.daemonTokenFile === "string" ? { daemonTokenFile: expandHome(r.daemonTokenFile) } : {}),
@@ -61,6 +73,7 @@ export function parseConfig(raw: unknown): GatewayConfig {
     hostId: str("hostId", "local"),
     hostName: str("hostName", "openrig"),
     tombstoneLimit,
+    xOpenrig: { includeText: x.includeText === true, replay },
   };
 }
 

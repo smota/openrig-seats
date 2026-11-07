@@ -1,7 +1,7 @@
 import { DaemonClient, DaemonError, type DaemonEvent } from "./daemon.js";
-import { isoOrUndefined, mapAttention, mapRig, mapSeat, mapWork, WORK_ACTIVE } from "./map.js";
+import { isoOrUndefined, mapAttention, mapEvent, mapRig, mapSeat, mapWork, WORK_ACTIVE, type EventRecord } from "./map.js";
 import { QUEUE_PAGE, ROUTES } from "./routes.js";
-import type { Change, Features, Json, SourceKind } from "./types.js";
+import type { Change, ExtensionKind, Features, Json, SourceKind } from "./types.js";
 
 export interface SourceOptions {
   daemon: DaemonClient;
@@ -13,6 +13,13 @@ export interface SourceOptions {
   debounceMs?: number;
   /** Full resync even without a gap, as a drift backstop. Default 300000; 0 disables. */
   resyncIntervalMs?: number;
+  /**
+   * Include the daemon's free text (held reason, error text, prompt reason or summary, event summaries) in the
+   * `x-openrig` extension. Off by default: that text may hold message content or credentials.
+   */
+  includeText?: boolean;
+  /** Events asked for on a cold start (newest N of ALL daemon event types, not only the mapped ones). Default 2000. */
+  eventReplay?: number;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
   /** A failed refresh is retried after this long, doubling up to retryMaxMs. Defaults 500 and 30000. */
@@ -28,6 +35,11 @@ export interface SourceStatus {
   resyncs: number;
   reconnects: number;
 }
+
+/** Newest events kept for `x-openrig.event`; older ones are deleted. */
+export const EVENT_RING_CAP = 200;
+export const DEFAULT_EVENT_REPLAY = 2000;
+const EVENT_KIND: ExtensionKind = "x-openrig.event";
 
 const KINDS: SourceKind[] = ["host", "rig", "seat", "attention", "work"];
 const key = (k: string, id: string) => `${k}\u0000${id}`;
@@ -78,6 +90,9 @@ export class OpenRigSource {
   private nodesRaw = new Map<string, Json[]>();
   private attentionRaw: Json[] = [];
   private queueRaw: Json[] = [];
+  private eventsRaw: EventRecord[] = [];
+  /** Seats currently inside a needs_input episode, by session, with the reason that opened it. */
+  private promptEpisodes = new Map<string, string>();
 
   private emitted = new Map<string, { sig: string; data: Json }>();
 
@@ -107,7 +122,7 @@ export class OpenRigSource {
   }
 
   /** Current projection per kind (the source's own mirror, used by tests and the gateway's first snapshot). */
-  current(kind: SourceKind): Json[] {
+  current(kind: SourceKind | ExtensionKind): Json[] {
     return [...this.emitted.entries()].filter(([k]) => k.startsWith(kind + "\u0000")).map(([, v]) => v.data);
   }
 
@@ -195,7 +210,7 @@ export class OpenRigSource {
         await this.checkIdentity(conn.signal);
         let opened!: () => void;
         const isOpen = new Promise<void>((resolve) => (opened = resolve));
-        const events = this.daemon.events({ lastSeq: this.lastSeq, signal: conn.signal, onOpen: () => opened() });
+        const events = this.daemon.events({ lastSeq: this.lastSeq, replay: this.opts.eventReplay ?? DEFAULT_EVENT_REPLAY, signal: conn.signal, onOpen: () => opened() });
         const iterator = events[Symbol.asyncIterator]();
         const first = iterator.next();
         // Attach a no-op catch so a failure while we are still snapshotting is surfaced later, not unhandled.
@@ -252,6 +267,7 @@ export class OpenRigSource {
     if (before !== undefined && this.identity !== undefined && before !== this.identity) {
       this.opts.log?.("daemon restarted; event sequence forgotten");
       this.lastSeq = null;
+      this.clearEvents();
     }
   }
 
@@ -263,13 +279,42 @@ export class OpenRigSource {
       if (ev.seq === prev) return false; // duplicate delivery
       if (ev.seq < prev) {
         resync = true; // the log restarted: nothing we hold is trustworthy
+        this.clearEvents();
       } else if (ev.seq > prev + 1) {
         resync = true; // a gap
       }
     }
     this.lastSeq = ev.seq;
+    this.keepEvent(ev.seq, ev.event);
     this.handleEvent(ev.event);
     return resync;
+  }
+
+  private clearEvents(): void {
+    this.eventsRaw = [];
+    this.promptEpisodes.clear();
+  }
+
+  /**
+   * Keeps the event in the bounded `x-openrig.event` ring when it is one of the mapped types. A prompt is
+   * emitted once per episode: the seat leaving needs_input ends it, so the next prompt is new.
+   */
+  private keepEvent(seq: number, e: DaemonEvent["event"]): void {
+    if (e.type === "agent.activity") {
+      const session = typeof e.sessionName === "string" ? e.sessionName : "";
+      const a = typeof e.activity === "object" && e.activity !== null ? (e.activity as Json) : {};
+      if (session && a.state !== "needs_input") this.promptEpisodes.delete(session);
+      else if (session) {
+        const reason = typeof a.reason === "string" ? a.reason : "";
+        if (this.promptEpisodes.get(session) === reason) return;
+        this.promptEpisodes.set(session, reason);
+      }
+    }
+    const rec = mapEvent(seq, e, this.opts.includeText === true);
+    if (!rec) return;
+    this.eventsRaw.push(rec);
+    while (this.eventsRaw.length > EVENT_RING_CAP) this.eventsRaw.shift();
+    this.publish();
   }
 
   private queueFullResync(): void {
@@ -477,9 +522,9 @@ export class OpenRigSource {
 
   // ---- projection ----
 
-  private project(): Map<string, { kind: SourceKind; id: string; data: Json }> {
-    const out = new Map<string, { kind: SourceKind; id: string; data: Json }>();
-    const put = (kind: SourceKind, data: Json | null) => {
+  private project(): Map<string, { kind: SourceKind | ExtensionKind; id: string; data: Json }> {
+    const out = new Map<string, { kind: SourceKind | ExtensionKind; id: string; data: Json }>();
+    const put = (kind: SourceKind | ExtensionKind, data: Json | null) => {
       if (!data) return;
       out.set(key(kind, String(data.id)), { kind, id: String(data.id), data });
     };
@@ -509,7 +554,7 @@ export class OpenRigSource {
     const attention: Json[] = [];
     if (this.feat.attention) {
       for (const item of this.attentionRaw) {
-        const mapped = mapAttention(item, seatIdOf);
+        const mapped = mapAttention(item, seatIdOf, this.opts.includeText === true);
         if (!mapped) continue;
         const at = isoOrUndefined((item as Json).at);
         attention.push({ ...mapped, ...(at ? { __at: at } : {}) });
@@ -518,7 +563,7 @@ export class OpenRigSource {
     }
     for (const n of nodes) {
       const id = typeof n.nodeId === "string" ? n.nodeId : "";
-      const seat = mapSeat(n, attentionBySeat.get(id) ?? []);
+      const seat = mapSeat(n, attentionBySeat.get(id) ?? [], this.opts.includeText === true);
       if (seat) put("seat", { ...seat, ...(isoOrUndefined(n.lastActivityAt) ? { __at: isoOrUndefined(n.lastActivityAt) } : {}) });
     }
     for (const a of attention) put("attention", a);
@@ -528,9 +573,28 @@ export class OpenRigSource {
       for (const row of this.queueRaw) {
         if (!WORK_ACTIVE.has(String((row as Json).state))) continue;
         const id = String((row as Json).qitemId ?? "");
-        const mapped = mapWork(row, seatIdOf, waiting.has(id));
+        const mapped = mapWork(row, seatIdOf, waiting.has(id), this.opts.includeText === true);
         if (mapped) put("work", { ...mapped, __at: isoOrUndefined((row as Json).tsUpdated) });
       }
+    }
+    for (const ev of this.eventsRaw) {
+      const id = `ev-${ev.seq}`;
+      const fromSeatId = seatIdOf(ev.from);
+      const toSeatId = seatIdOf(ev.to);
+      put(EVENT_KIND, {
+        id,
+        title: ev.eventType,
+        summary: ev.summary,
+        eventType: ev.eventType,
+        daemonEvent: ev.daemonEvent,
+        seq: ev.seq,
+        ...(ev.from ? { fromSession: ev.from } : {}),
+        ...(ev.to ? { toSession: ev.to } : {}),
+        ...(fromSeatId ? { fromSeatId } : {}),
+        ...(toSeatId ? { toSeatId } : {}),
+        ...(ev.workId ? { workId: ev.workId } : {}),
+        __at: ev.at,
+      });
     }
     return out;
   }
@@ -550,7 +614,7 @@ export class OpenRigSource {
     for (const k of [...this.emitted.keys()]) {
       if (want.has(k)) continue;
       this.emitted.delete(k);
-      const [kind, id] = k.split("\u0000") as [SourceKind, string];
+      const [kind, id] = k.split("\u0000") as [SourceKind | ExtensionKind, string];
       this.opts.onChange({ kind, id, op: "delete" });
     }
   }

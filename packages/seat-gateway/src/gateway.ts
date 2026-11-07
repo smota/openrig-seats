@@ -1,6 +1,6 @@
 import { serve, type ServerType } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
-import { PROTOCOL_VERSION, CORE_KINDS, type Capabilities } from "@openrig-seats/seat-protocol";
+import { PROTOCOL_VERSION, CORE_KINDS, OPENRIG_EVENT_KIND, OPENRIG_EXTENSION, OPENRIG_EXTENSION_VERSION, type Capabilities } from "@openrig-seats/seat-protocol";
 import { DaemonClient, OpenRigSource, readSecretFile, type Features } from "@openrig-seats/seat-source-openrig";
 import { isLoopbackBind, type GatewayConfig } from "./config.js";
 import { createApp } from "./server.js";
@@ -42,6 +42,8 @@ export class Gateway {
       onChange: (c) => void this.store.apply(c),
       hostId: config.hostId,
       hostName: config.hostName,
+      includeText: config.xOpenrig.includeText,
+      eventReplay: config.xOpenrig.replay,
       ...(opts.log ? { log: opts.log } : {}),
       ...opts.source,
     });
@@ -74,7 +76,7 @@ export class Gateway {
 
   private kinds(): string[] {
     const f: Features = this.source.features();
-    return CORE_KINDS.filter((k): k is Exclude<typeof k, "turn"> => k !== "turn" && f[k]);
+    return [...CORE_KINDS.filter((k): k is Exclude<typeof k, "turn"> => k !== "turn" && f[k]), OPENRIG_EVENT_KIND];
   }
 
   /** Features are probed against the daemon (a 404 turns one off) and the answer is reused for a while. */
@@ -93,9 +95,10 @@ export class Gateway {
     return {
       protocol: { version: PROTOCOL_VERSION },
       kinds: this.kinds(),
-      extensions: [],
+      extensions: [OPENRIG_EXTENSION],
+      extensionVersions: { [OPENRIG_EXTENSION]: OPENRIG_EXTENSION_VERSION },
       harnesses,
-      features: { attention: f.attention, work: f.work, snapshot: true, resume: true, act: false, terminal: false },
+      features: { attention: f.attention, work: f.work, snapshot: true, resume: true, act: false, terminal: false, "x-openrig.text": this.opts.config.xOpenrig.includeText },
     };
   }
 

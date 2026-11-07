@@ -1,0 +1,14 @@
+{
+  "id": "ev-12",
+  "updatedAt": "2026-11-07T12:00:00Z",
+  "eventType": "handoff",
+  "daemonEvent": "queue.handed_off",
+  "seq": 12,
+  "title": "handoff",
+  "summary": "handoff q-100",
+  "fromSession": "lead-planner@acme",
+  "toSession": "dev-writer@acme",
+  "fromSeatId": "node-a1",
+  "toSeatId": "node-a2",
+  "workId": "q-100"
+}

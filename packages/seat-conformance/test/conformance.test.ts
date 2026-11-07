@@ -3,13 +3,17 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  REQUIRED_EVENT_FIELDS,
   REQUIRED_MOUNTS,
+  REQUIRED_NODE_FIELDS,
   REQUIRED_ROUTES,
   REQUIRED_TOKENS,
   buildSnapshot,
   diffRemovals,
   extractOutcomes,
   extractRigEventTypes,
+  extractEventFields,
+  extractNodeFields,
   extractMounts,
   extractRoutes,
   hasToken,
@@ -46,6 +50,16 @@ describe("snapshot file", () => {
     expect(s.transport.failureStatus.session_missing).toBe(404);
     expect(s.transport.failureStatus.tmux_unavailable).toBe(503);
     for (const v of ["agent.activity", "rig.created", "seat.model_divergence"]) expect(s.rigEventTypes).toContain(v);
+  });
+
+  it("records every daemon node field and RigEvent field the x-openrig extension reads", () => {
+    const s = snapshot.surfaces;
+    for (const [group, fields] of Object.entries(REQUIRED_NODE_FIELDS)) expect(s.nodeFields[group as keyof typeof s.nodeFields], group).toEqual([...fields].sort());
+    for (const [event, fields] of Object.entries(REQUIRED_EVENT_FIELDS)) {
+      expect(s.rigEventTypes, event).toContain(event);
+      expect(s.eventFields[event], event).toEqual([...fields].sort());
+    }
+    for (const v of ["queue.created", "queue.claimed", "queue.handed_off", "queue.updated"]) expect(s.rigEventTypes).toContain(v);
   });
 });
 
@@ -97,6 +111,22 @@ describe("removal detection", () => {
     ]);
   });
 
+  it("reports a renamed node field and a renamed event field", () => {
+    const cur = structuredClone(base);
+    cur.nodeFields.node = cur.nodeFields.node.map((f) => (f === "heldReason" ? "heldBecause" : f));
+    cur.nodeFields.needsInput = cur.nodeFields.needsInput.filter((f) => f !== "reason");
+    cur.eventFields["queue.handed_off"] = cur.eventFields["queue.handed_off"]!.filter((f) => f !== "toSession");
+    delete cur.eventFields["queue.claimed"];
+    expect(diffRemovals(snapshot, cur).sort()).toEqual([
+      "RigEvent field removed (queue.claimed): destinationSession",
+      "RigEvent field removed (queue.claimed): qitemId",
+      "RigEvent field removed (queue.claimed): summary",
+      "RigEvent field removed (queue.handed_off): toSession",
+      "node field removed (needsInput): reason",
+      "node field removed (node): heldReason",
+    ]);
+  });
+
   it("allows additions", () => {
     const cur = structuredClone(base);
     cur.rigEventTypes.push("new.event");
@@ -107,6 +137,18 @@ describe("removal detection", () => {
 });
 
 describe("extractors", () => {
+  it("reads node and event fields from type declarations, ignoring comments", () => {
+    const src = `interface AgentActivity { state: string; reason: string }
+      export interface NodeInventoryEntry { nodeId: string; // heldReason: string
+        heldReason?: string | null; activityState?: { activity: string; needsInput: { count: number; reason: string | null } } | null }
+      export type RigEvent = | { type: "queue.claimed"; qitemId: string; destinationSession: string } | { type: "rig.deleted"; rigId: string };`;
+    const f = extractNodeFields(src);
+    expect(f.node).toEqual(["activityState", "heldReason", "nodeId"]);
+    expect(f.activityState).toEqual(["activity", "needsInput"]);
+    expect(f.needsInput).toEqual(["count", "reason"]);
+    expect(f.agentActivity).toEqual(["reason", "state"]);
+    expect(extractEventFields(src)).toEqual({ "queue.claimed": ["destinationSession", "qitemId"], "rig.deleted": ["rigId"] });
+  });
   it("reads Hono registrations and ignores context getters", () => {
     expect(extractRoutes(`app.get("/a", h); r.post("/b/:id", h); c.get("db" as never);`)).toEqual(["app GET /a", "r POST /b/:id"]);
   });
@@ -162,6 +204,14 @@ describe.skipIf(!available)("mutations of the checkout sources are detected", ()
   it("removing a failure reason fails", () => {
     const problems = mutate("packages/daemon/src/routes/transport.ts", /^\s*session_missing: 404,\n/m, "");
     expect(problems).toContain("transport failure reason removed: session_missing");
+  });
+
+  it("renaming a node field or an event field in the daemon types fails", () => {
+    const types = "packages/daemon/src/domain/types.ts";
+    expect(mutate(types, "  heldReason?: string | null;", "  heldReasonX?: string | null;")).toContain("node field removed (node): heldReason");
+    expect(mutate(types, "needsInput: { count: number; reason: string | null };", "needsInput: { total: number; reason: string | null };")).toContain("node field removed (needsInput): count");
+    expect(mutate(types, 'type: "queue.handed_off"; qitemId: string; fromSession: string;', 'type: "queue.handed_off"; qitemId: string; from: string;')).toContain("RigEvent field removed (queue.handed_off): fromSession");
+    expect(mutate(types, '{ type: "queue.claimed";', '{ type: "queue.taken";')).toContain("RigEvent variant removed: queue.claimed");
   });
 
   it("commenting out a route registration fails", () => {

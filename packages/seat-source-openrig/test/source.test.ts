@@ -62,8 +62,9 @@ describe("snapshot mapping", () => {
     make();
     await source.resync();
     expect(last("rig", "rig-acme-1")?.data).toMatchObject({ hostId: "host-1", name: "acme-ops", state: "partial", seatCount: 3 });
-    expect(last("attention", "queue:q-100")?.data).toMatchObject({ severity: "warning", state: "open", seatId: "node-a2", impact: "The weekly release", since: "2026-11-07T11:30:00.000Z" });
-    expect(last("attention", "queue-update:q-101")?.data).toMatchObject({ severity: "info" });
+    expect(last("attention", "queue:q-100")?.data).toMatchObject({ severity: "warning", state: "open", seatId: "node-a2", title: "Request for a person: queue:q-100", since: "2026-11-07T11:30:00.000Z" });
+    expect(last("attention", "queue:q-100")?.data).not.toHaveProperty("impact");
+    expect(last("attention", "queue-update:q-101")?.data).toMatchObject({ severity: "info", title: "Update for a person: queue-update:q-101" });
     expect(last("work", "q-100")?.data).toMatchObject({ state: "pending", creatorSeatId: "node-a2", waitingOnHuman: true });
     expect(last("work", "q-200")?.data).toMatchObject({ state: "in-progress", assigneeSeatId: "node-b1", creatorSeatId: "node-a1" });
     expect(last("work", "q-200")?.data).not.toHaveProperty("waitingOnHuman");
@@ -85,12 +86,33 @@ describe("snapshot mapping", () => {
 });
 
 describe("events", () => {
-  it("opens the stream with replay=0 and no Last-Event-ID on the first connection", async () => {
+  it("opens the stream with a bounded replay budget (default 2000) and no Last-Event-ID on the first connection", async () => {
     make().start();
     await waitFor(() => changes.length > 0 && daemon.streamCount === 1);
     const req = daemon.requests.find((r) => r.path === "/api/events")!;
-    expect(req.query).toBe("?replay=0");
+    expect(req.query).toBe("?replay=2000");
     expect(req.lastEventId).toBeUndefined();
+  });
+
+  it("uses a configured replay budget and feeds the replayed events through the same mapper", async () => {
+    for (let i = 0; i < 5; i++) daemon.emit({ type: "queue.claimed", qitemId: `q-${i}`, destinationSession: "dev-writer@acme-ops", claimedAt: "x", closureRequiredAt: null, summary: "c" });
+    make({ eventReplay: 3 }).start();
+    await waitFor(() => source.status().lastSeq === 5 && daemon.streamCount === 1, 4000, "replay");
+    expect(daemon.requests.find((r) => r.path === "/api/events")!.query).toBe("?replay=3");
+    expect(source.current("x-openrig.event").map((e) => e.seq).sort()).toEqual([3, 4, 5]);
+  });
+
+  it("drops the cursor and replays the budget again when the daemon restarted", async () => {
+    make().start();
+    await waitFor(() => daemon.streamCount === 1 && last("seat", "node-a1"));
+    daemon.emit({ type: "queue.claimed", qitemId: "q-1", destinationSession: "dev-writer@acme-ops", claimedAt: "x", closureRequiredAt: null, summary: "c" });
+    await waitFor(() => source.current("x-openrig.event").length === 1);
+    await daemon.restart({ resetLog: true });
+    daemon.emit({ type: "queue.created", qitemId: "q-9", sourceSession: "a@b", destinationSession: "dev-writer@acme-ops", priority: "routine", tier: null, summary: "n" });
+    await waitFor(() => source.current("x-openrig.event").length === 1 && source.current("x-openrig.event")[0]!.workId === "q-9", 6000, "fresh ring");
+    const reqs = daemon.requests.filter((r) => r.path === "/api/events");
+    expect(reqs.at(-1)!.lastEventId).toBeUndefined();
+    expect(reqs.at(-1)!.query).toBe("?replay=2000");
   });
 
   it("upserts a seat from agent.activity and the daemon's next read", async () => {
@@ -367,8 +389,17 @@ describe("integrity fixes", () => {
     await source.resync();
     expect(JSON.stringify(changes)).not.toContain(SENTINEL);
     expect(last("work", "q-x1")?.data?.title).toBe("Queue item q-x1");
+    expect(last("work", "q-x2")?.data?.title).toBe("Queue item q-x2"); // summary is daemon text: off by default
+    expect(last("attention", "queue:q-x1")?.data?.title).toBe("Request for a person: queue:q-x1");
+  });
+
+  it("with includeText the work title, attention title and impact are the daemon's summary and unblocks", async () => {
+    daemon.queue = [{ qitemId: "q-x2", tsCreated: "2026-11-07T10:00:00.000Z", tsUpdated: "2026-11-07T10:00:00.000Z", sourceSession: "a@b", destinationSession: "c@d", state: "pending", priority: "routine", body: "BODY", summary: "Safe summary" }];
+    make({ includeText: true });
+    await source.resync();
     expect(last("work", "q-x2")?.data?.title).toBe("Safe summary");
-    expect(last("attention", "queue:q-x1")?.data?.title).toBe("Request summary unavailable");
+    expect(last("attention", "queue:q-100")?.data).toMatchObject({ title: "Approve the release notes", impact: "The weekly release" });
+    expect(JSON.stringify(changes)).not.toContain("BODY");
   });
 });
 
@@ -423,5 +454,131 @@ describe("ordering and probing", () => {
     expect((await source.probe()).seat).toBe(true);
     await source.resync();
     expect(source.current("seat").map((s) => s.id)).toEqual(["n-rig-acme-9"]);
+  });
+});
+
+describe("x-openrig extension", () => {
+  const ext = (id: string) => (last("seat", id)?.data as { "x-openrig"?: Record<string, unknown> } | undefined)?.["x-openrig"];
+
+  it("carries structured daemon node detail on every seat, valid against the schema", async () => {
+    const node = daemon.nodes.get("rig-acme-1")![0]!;
+    Object.assign(node, {
+      podNamespace: "lead", startupStatus: "ready", pendingWorkCount: 2, inProgressWorkCount: 1, intentionallyStopped: false,
+      heldReason: "excluded_from_subset", latestError: "Harness launch requires attention: /home/x/secret",
+      activityState: { activity: "working", display: "working", needsInput: { count: 0, reason: null }, decidedBy: null, seq: 1, lastSwap: null },
+    });
+    make();
+    await source.resync();
+    expect(ext("node-a1")).toMatchObject({
+      version: "1.0", sessionName: "lead-planner@acme-ops", rigName: "acme-ops", podNamespace: "lead", sessionStatus: "running", lifecycleState: "running",
+      startupStatus: "ready", held: true, heldReasonCode: "excluded_from_subset", errorCategory: "launch_unconfirmed", activity: "working", display: "working",
+      needsInputCount: 0, pendingWorkCount: 2, inProgressWorkCount: 1, intentionallyStopped: false, needsAttention: false,
+    });
+    for (const c of changes) if (c.kind === "seat" && c.op === "upsert") expect(validator("seat")(c.data), JSON.stringify(validator("seat").errors)).toBe(true);
+    expect(ext("node-a3")).toMatchObject({ version: "1.0", sessionStatus: "detached" });
+    expect(ext("node-a3")).not.toHaveProperty("held");
+    expect(ext("node-a3")).not.toHaveProperty("errorCategory");
+  });
+
+  it("by default carries no daemon free text: categories and allowlisted codes only", async () => {
+    const [a1, a2, a3] = daemon.nodes.get("rig-acme-1")!;
+    a1!.latestError = { message: "token=abc123 exploded" };
+    a1!.heldReason = "operator said: password=hunter2";
+    a2!.activityState = { activity: "needs-input", display: "needs input", needsInput: { count: 1, reason: "permission_prompt", summary: "Allow edit of the zebra file?", prompt: "RAW PROMPT" } };
+    a3!.startupStatus = "failed";
+    make();
+    await source.resync();
+    expect(ext("node-a1")).toMatchObject({ errorCategory: "unknown", held: true, heldReasonCode: "other" });
+    expect(ext("node-a2")).toMatchObject({ needsInputCount: 1, promptKind: "permission_prompt", arbitratedNeedsInput: true });
+    expect(ext("node-a3")).toMatchObject({ errorCategory: "startup_failed" });
+    const text = JSON.stringify(changes);
+    for (const s of ["abc123", "hunter2", "zebra", "RAW PROMPT"]) expect(text).not.toContain(s);
+    for (const f of ["lastError", "heldReason", "promptSummary"]) for (const id of ["node-a1", "node-a2"]) expect(ext(id)).not.toHaveProperty(f);
+  });
+
+  it("with includeText the daemon text is carried: bounded, one line, never the raw prompt", async () => {
+    const [a1, a2] = daemon.nodes.get("rig-acme-1")!;
+    a1!.latestError = { message: "token=abc123 exploded" };
+    a1!.heldReason = "x".repeat(1000);
+    a2!.activityState = { activity: "needs-input", display: "needs input", needsInput: { count: 1, reason: "selection prompt", summary: "Allow\nedit?", prompt: "RAW PROMPT" } };
+    make({ includeText: true });
+    await source.resync();
+    expect(ext("node-a1")?.lastError).toBe("token=abc123 exploded");
+    expect((ext("node-a1")?.heldReason as string).length).toBe(300);
+    expect(ext("node-a2")).toMatchObject({ promptSummary: "Allow edit?", promptKind: "selection_prompt" });
+    expect(JSON.stringify(changes)).not.toContain("RAW PROMPT");
+    for (const c of changes) if (c.kind === "seat" && c.op === "upsert") expect(validator("seat")(c.data), JSON.stringify(validator("seat").errors)).toBe(true);
+  });
+
+  it("with includeText the prompt summary falls back to the reason, and nothing else", async () => {
+    const [, a2] = daemon.nodes.get("rig-acme-1")!;
+    a2!.activityState = { activity: "needs-input", display: "needs input", needsInput: { count: 1, reason: "selection prompt", prompt: "RAW PROMPT" } };
+    make({ includeText: true });
+    await source.resync();
+    expect(ext("node-a2")?.promptSummary).toBe("selection prompt");
+  });
+
+  const emitAll = async () => {
+    const s1 = daemon.emit({ type: "queue.handed_off", qitemId: "q-100", fromSession: "lead-planner@acme-ops", toSession: "dev-writer@acme-ops", closureReason: "handed_off_to", summary: "Review\nnotes", body: "SECRET BODY" });
+    const s2 = daemon.emit({ type: "queue.updated", qitemId: "q-100", fromState: "in-progress", toState: "done", closureReason: "no-follow-on", closureTarget: null, actorSession: "dev-writer@acme-ops", summary: "a human reply" });
+    daemon.emit({ type: "queue.updated", qitemId: "q-101", fromState: "in-progress", toState: "done", closureReason: "answered", closureTarget: null, actorSession: "dev-writer@acme-ops", summary: "done" });
+    daemon.emit({ type: "queue.updated", qitemId: "q-101", fromState: "pending", toState: "blocked", closureReason: null, closureTarget: null, actorSession: "x@y", summary: "ignored" });
+    daemon.emit({ type: "queue.claimed", qitemId: "q-200", destinationSession: "dev-builder@acme-build", claimedAt: "x", closureRequiredAt: null, summary: "claim it" });
+    daemon.emit({ type: "queue.created", qitemId: "q-300", sourceSession: "ghost@nowhere", destinationSession: "lead-planner@acme-ops", priority: "routine", tier: null, summary: "hello" });
+    daemon.emit({ type: "agent.activity", rigId: "rig-acme-1", nodeId: "node-a2", sessionName: "dev-writer@acme-ops", runtime: "codex", activity: { state: "needs_input", reason: "permission prompt: rm -rf /home/x" } });
+    await waitFor(() => changes.filter((c) => c.kind === "x-openrig.event").length >= 6, 4000, "six events");
+    return { s1, s2 };
+  };
+
+  it("serves handoff, close, claim, message and prompt as x-openrig.event with seat ids and fixed summaries; a close is never an answer", async () => {
+    make().start();
+    await waitFor(() => daemon.streamCount === 1 && last("seat", "node-a1"));
+    const { s1, s2 } = await emitAll();
+    const evs = changes.filter((c) => c.kind === "x-openrig.event");
+    for (const c of evs) expect(validator("x-openrig-event")(c.data), JSON.stringify(validator("x-openrig-event").errors)).toBe(true);
+    const byId = (id: string) => last("x-openrig.event", id)?.data;
+    expect(byId(`ev-${s1}`)).toMatchObject({ eventType: "handoff", daemonEvent: "queue.handed_off", seq: s1, summary: "handoff q-100", fromSession: "lead-planner@acme-ops", toSession: "dev-writer@acme-ops", fromSeatId: "node-a1", toSeatId: "node-a2", workId: "q-100" });
+    expect(byId(`ev-${s2}`)).toMatchObject({ eventType: "close", summary: "close q-100", fromSeatId: "node-a2" });
+    const kinds = evs.map((c) => (c.data as { eventType: string }).eventType).sort();
+    expect(kinds).toEqual(["claim", "close", "close", "handoff", "message", "prompt"]);
+    const msg = evs.find((c) => (c.data as { eventType: string }).eventType === "message")!.data as Record<string, unknown>;
+    expect(msg).toMatchObject({ fromSession: "ghost@nowhere", toSeatId: "node-a1" });
+    expect(msg).not.toHaveProperty("fromSeatId");
+    const text = JSON.stringify(changes);
+    for (const s of ["SECRET BODY", "Review", "a human reply", "claim it", "hello", "rm -rf"]) expect(text).not.toContain(s);
+  });
+
+  it("with includeText the event summary is the daemon's short single line", async () => {
+    make({ includeText: true }).start();
+    await waitFor(() => daemon.streamCount === 1 && last("seat", "node-a1"));
+    const { s1 } = await emitAll();
+    expect(last("x-openrig.event", `ev-${s1}`)?.data).toMatchObject({ summary: "Review notes" });
+    const prompt = changes.find((c) => (c.data as { eventType?: string } | undefined)?.eventType === "prompt")!;
+    expect((prompt.data as { summary: string }).summary).toBe("permission prompt: rm -rf /home/x");
+    expect(JSON.stringify(changes)).not.toContain("SECRET BODY");
+  });
+
+  it("a prompt episode ends when the seat leaves needs_input, so a later identical prompt is emitted", async () => {
+    make().start();
+    await waitFor(() => daemon.streamCount === 1 && last("seat", "node-a1"));
+    const act = (state: string) => ({ type: "agent.activity", rigId: "rig-acme-1", nodeId: "node-a2", sessionName: "dev-writer@acme-ops", runtime: "codex", activity: { state, reason: "permission_prompt" } });
+    daemon.emit(act("needs_input"));
+    daemon.emit(act("needs_input")); // re-reported inside the same episode
+    await waitFor(() => source.status().lastSeq === 2, 4000, "two prompts");
+    expect(source.current("x-openrig.event").length).toBe(1);
+    daemon.emit(act("running"));
+    daemon.emit(act("needs_input"));
+    await waitFor(() => source.status().lastSeq === 4, 4000, "four events");
+    expect(source.current("x-openrig.event").length).toBe(2);
+  });
+
+  it("keeps at most 200 events and clears them when the daemon log restarts", async () => {
+    make().start();
+    await waitFor(() => daemon.streamCount === 1 && last("seat", "node-a1"));
+    for (let i = 0; i < 205; i++) daemon.emit({ type: "queue.claimed", qitemId: `q-${i}`, destinationSession: "dev-writer@acme-ops", claimedAt: "x", closureRequiredAt: null, summary: "c" });
+    await waitFor(() => source.status().lastSeq === 205, 6000, "all events");
+    expect(source.current("x-openrig.event").length).toBe(200);
+    await daemon.restart({ resetLog: true });
+    await waitFor(() => source.current("x-openrig.event").length === 0, 6000, "events cleared");
   });
 });

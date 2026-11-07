@@ -24,7 +24,7 @@ const validate = (name: string) => {
 describe("schema set", () => {
   it("lists exactly the protocol kinds and messages", () => {
     expect(names.sort()).toEqual([
-      "act-request", "act-response", "action", "attention", "capabilities", "host", "rig", "seat", "stream-control", "stream-envelope", "turn", "work",
+      "act-request", "act-response", "action", "attention", "capabilities", "host", "rig", "seat", "stream-control", "stream-envelope", "turn", "work", "x-openrig-event", "x-openrig-seat",
     ]);
   });
 

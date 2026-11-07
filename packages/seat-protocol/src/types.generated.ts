@@ -46,6 +46,7 @@ activity?: string
  */
 generationId?: string
 attentionIds?: string[]
+"x-openrig"?: XOpenrigSeatExtension
 [k: string]: unknown
 })
 /**
@@ -128,6 +129,30 @@ data?: {
 }
 [k: string]: unknown
 })
+/**
+ * Data of the extension kind `x-openrig.event`: a hand-off, answer, claim, close, message or prompt seen on the daemon event stream. Only identifiers and a summary: never a message body. By default `summary` is built from fixed metadata (event type and work id); with the gateway's text opt-in (capabilities.features['x-openrig.text']) it is the daemon's own short text, which is sensitive and UNTRUSTED. One line, at most 140 characters. `answer` is part of the vocabulary but the OpenRig event stream carries no authoritative answer marker, so this source emits `close`. A reader that does not know the kind draws it as a generic card (title, summary).
+ * 
+ * This interface was referenced by `SeatProtocol`'s JSON-Schema
+ * via the `definition` "XOpenrigEvent".
+ */
+export type XOpenrigEvent = (Entity & {
+eventType: ("message" | "claim" | "handoff" | "answer" | "close" | "prompt")
+/**
+ * The daemon's RigEvent type this came from, for example queue.handed_off.
+ */
+daemonEvent?: string
+/**
+ * The daemon's event sequence number.
+ */
+seq: number
+summary?: string
+fromSession?: string
+toSession?: string
+fromSeatId?: string
+toSeatId?: string
+workId?: string
+[k: string]: unknown
+})
 
 /**
  * Fields every kind carries: a stable id and the time of its last change; title, summary and actions let any UI render an unknown kind as a generic card.
@@ -151,6 +176,82 @@ input?: boolean | { [k: string]: Json }
  * True: the UI asks for confirmation before sending.
  */
 danger?: boolean
+[k: string]: unknown
+}
+/**
+ * Optional OpenRig-specific detail (extension x-openrig). Ignore if unknown.
+ */
+export interface XOpenrigSeatExtension {
+/**
+ * Version of this extension, major.minor; the same value capabilities.extensionVersions['x-openrig'] advertises.
+ */
+version: string
+/**
+ * Daemon canonicalSessionName.
+ */
+sessionName?: string
+/**
+ * Daemon rigName.
+ */
+rigName?: string
+/**
+ * Daemon podNamespace.
+ */
+podNamespace?: string
+/**
+ * Daemon sessionStatus, for example running or detached.
+ */
+sessionStatus?: string
+/**
+ * Daemon lifecycleState.
+ */
+lifecycleState?: string
+startupStatus?: ("pending" | "ready" | "attention_required" | "failed")
+intentionallyStopped?: boolean
+needsAttention?: boolean
+/**
+ * Present only when the daemon gave an authoritative answer (not null).
+ */
+arbitratedNeedsInput?: boolean
+/**
+ * Daemon activityState.activity.
+ */
+activity?: string
+/**
+ * Daemon activityState.display.
+ */
+display?: string
+needsInputCount?: number
+/**
+ * True when the daemon holds this seat's messages (node.heldReason is set).
+ */
+held?: boolean
+/**
+ * Allowlisted hold reason; anything else is other.
+ */
+heldReasonCode?: ("excluded_from_subset" | "other")
+/**
+ * Derived from startupStatus and known daemon error prefixes, else unknown. Present when the seat has an error.
+ */
+errorCategory?: ("startup_failed" | "launch_unconfirmed" | "unknown")
+/**
+ * Allowlisted kind of the prompt the seat waits on.
+ */
+promptKind?: ("permission_prompt" | "selection_prompt" | "other")
+/**
+ * Opt-in text: node.heldReason. Sensitive, untrusted.
+ */
+heldReason?: string
+/**
+ * Opt-in text: node.latestError. Sensitive, untrusted.
+ */
+lastError?: string
+/**
+ * Opt-in text: activityState.needsInput summary, else reason. Sensitive, untrusted.
+ */
+promptSummary?: string
+pendingWorkCount?: number
+inProgressWorkCount?: number
 [k: string]: unknown
 }
 /**
@@ -334,6 +435,12 @@ kinds: string[]
  * Extension namespaces in use.
  */
 extensions: string[]
+/**
+ * Version (major.minor) of each extension namespace in use, for example {"x-openrig": "1.0"}. Optional.
+ */
+extensionVersions?: {
+[k: string]: string
+}
 harnesses: string[]
 /**
  * Optional features, for example terminal.
@@ -352,5 +459,84 @@ features: {
 export interface StreamControl {
 type: string
 reason?: ("cursor-unknown" | "cursor-pruned" | "cursor-ahead")
+[k: string]: unknown
+}
+/**
+ * Value of the `x-openrig` field on a seat: what the OpenRig daemon reports about a seat beyond the core fields. Ignorable by clients that do not know it. By default only structured fields are carried: held, heldReasonCode, errorCategory and promptKind come from allowlists, never from daemon free text. The free-text fields (heldReason, lastError, promptSummary) are present only when the gateway operator opted in (capabilities.features['x-openrig.text']); they are SENSITIVE and UNTRUSTED (the daemon may put message content or credentials in them): one line, at most 300 characters. Render as text only.
+ * 
+ * This interface was referenced by `SeatProtocol`'s JSON-Schema
+ * via the `definition` "XOpenrigSeat".
+ */
+export interface XOpenrigSeatExtension1 {
+/**
+ * Version of this extension, major.minor; the same value capabilities.extensionVersions['x-openrig'] advertises.
+ */
+version: string
+/**
+ * Daemon canonicalSessionName.
+ */
+sessionName?: string
+/**
+ * Daemon rigName.
+ */
+rigName?: string
+/**
+ * Daemon podNamespace.
+ */
+podNamespace?: string
+/**
+ * Daemon sessionStatus, for example running or detached.
+ */
+sessionStatus?: string
+/**
+ * Daemon lifecycleState.
+ */
+lifecycleState?: string
+startupStatus?: ("pending" | "ready" | "attention_required" | "failed")
+intentionallyStopped?: boolean
+needsAttention?: boolean
+/**
+ * Present only when the daemon gave an authoritative answer (not null).
+ */
+arbitratedNeedsInput?: boolean
+/**
+ * Daemon activityState.activity.
+ */
+activity?: string
+/**
+ * Daemon activityState.display.
+ */
+display?: string
+needsInputCount?: number
+/**
+ * True when the daemon holds this seat's messages (node.heldReason is set).
+ */
+held?: boolean
+/**
+ * Allowlisted hold reason; anything else is other.
+ */
+heldReasonCode?: ("excluded_from_subset" | "other")
+/**
+ * Derived from startupStatus and known daemon error prefixes, else unknown. Present when the seat has an error.
+ */
+errorCategory?: ("startup_failed" | "launch_unconfirmed" | "unknown")
+/**
+ * Allowlisted kind of the prompt the seat waits on.
+ */
+promptKind?: ("permission_prompt" | "selection_prompt" | "other")
+/**
+ * Opt-in text: node.heldReason. Sensitive, untrusted.
+ */
+heldReason?: string
+/**
+ * Opt-in text: node.latestError. Sensitive, untrusted.
+ */
+lastError?: string
+/**
+ * Opt-in text: activityState.needsInput summary, else reason. Sensitive, untrusted.
+ */
+promptSummary?: string
+pendingWorkCount?: number
+inProgressWorkCount?: number
 [k: string]: unknown
 }

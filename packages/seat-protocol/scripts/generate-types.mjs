@@ -12,6 +12,7 @@ const NAMES = {
   host: "Host", rig: "Rig", seat: "Seat", turn: "Turn", attention: "Attention", work: "Work",
   action: "DeclaredAction", "act-request": "ActRequest", "act-response": "ActResponse",
   capabilities: "Capabilities", "stream-envelope": "StreamEnvelope", "stream-control": "StreamControl",
+  "x-openrig-seat": "XOpenrigSeat", "x-openrig-event": "XOpenrigEvent",
 };
 
 // The 2020-12 meta-schema is referenced by URL: type it locally instead of fetching it, and type

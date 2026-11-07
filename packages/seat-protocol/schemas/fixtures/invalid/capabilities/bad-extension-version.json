@@ -1,0 +1,4 @@
+{
+  "protocol": { "version": "1.0" }, "kinds": [], "extensions": ["x-openrig"],
+  "extensionVersions": { "x-openrig": "one" }, "harnesses": [], "features": {}
+}

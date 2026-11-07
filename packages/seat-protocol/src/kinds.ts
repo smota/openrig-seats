@@ -85,3 +85,8 @@ export class Mirror {
     return [...this.items.keys()].filter((k) => (this.items.get(k)?.size ?? 0) > 0);
   }
 }
+
+/** The `x-openrig` extension: OpenRig-specific seat detail and the `x-openrig.event` kind. */
+export const OPENRIG_EXTENSION = "x-openrig";
+export const OPENRIG_EXTENSION_VERSION = "1.0";
+export const OPENRIG_EVENT_KIND = "x-openrig.event";

@@ -281,7 +281,85 @@
       "workflow.routing_table_changed",
       "workflow.step_closed",
       "workflow_spec.removed"
-    ]
+    ],
+    "nodeFields": {
+      "node": [
+        "activityState",
+        "agentActivity",
+        "arbitratedNeedsInput",
+        "canonicalSessionName",
+        "heldReason",
+        "inProgressWorkCount",
+        "intentionallyStopped",
+        "lastActivityAt",
+        "latestError",
+        "lifecycleState",
+        "logicalId",
+        "needsAttention",
+        "nodeId",
+        "nodeKind",
+        "pendingWorkCount",
+        "podNamespace",
+        "rigId",
+        "rigName",
+        "runtime",
+        "sessionStatus",
+        "startupStatus"
+      ],
+      "activityState": [
+        "activity",
+        "display",
+        "needsInput"
+      ],
+      "needsInput": [
+        "count",
+        "reason"
+      ],
+      "agentActivity": [
+        "reason",
+        "state"
+      ]
+    },
+    "eventFields": {
+      "agent.activity": [
+        "activity",
+        "nodeId",
+        "rigId",
+        "sessionName"
+      ],
+      "node.removed": [
+        "nodeId",
+        "rigId"
+      ],
+      "queue.claimed": [
+        "destinationSession",
+        "qitemId",
+        "summary"
+      ],
+      "queue.created": [
+        "destinationSession",
+        "qitemId",
+        "sourceSession",
+        "summary"
+      ],
+      "queue.handed_off": [
+        "fromSession",
+        "qitemId",
+        "summary",
+        "toSession"
+      ],
+      "queue.updated": [
+        "actorSession",
+        "closureReason",
+        "fromState",
+        "qitemId",
+        "summary",
+        "toState"
+      ],
+      "rig.deleted": [
+        "rigId"
+      ]
+    }
   },
   "required": {
     "routes": [

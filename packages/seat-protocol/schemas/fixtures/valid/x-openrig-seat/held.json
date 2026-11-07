@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "sessionName": "builder-1@acme",
+  "rigName": "acme",
+  "podNamespace": "dev",
+  "sessionStatus": "running",
+  "lifecycleState": "running",
+  "startupStatus": "ready",
+  "needsAttention": true,
+  "arbitratedNeedsInput": false,
+  "activity": "idle-at-prompt",
+  "display": "idle",
+  "pendingWorkCount": 2,
+  "inProgressWorkCount": 1,
+  "future": true,
+  "held": true,
+  "heldReasonCode": "excluded_from_subset",
+  "errorCategory": "launch_unconfirmed",
+  "promptKind": "permission_prompt"
+}

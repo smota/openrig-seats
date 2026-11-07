@@ -55,6 +55,35 @@ export const REQUIRED_TOKENS: ReadonlyArray<{ file: keyof typeof ROUTE_FILES; to
   { file: "transport", token: "deliveryId", why: "send idempotency key" },
 ];
 
+/**
+ * Daemon node fields (`NodeInventoryEntry` in domain/types.ts, served by /api/rigs/:id/nodes) that the
+ * source and the `x-openrig` seat extension read, with the nested `activityState`, `needsInput` and
+ * `agentActivity` members. A rename upstream removes the name and fails the diff.
+ */
+export const REQUIRED_NODE_FIELDS: Readonly<Record<NodeFieldGroup, readonly string[]>> = {
+  node: [
+    "nodeId", "rigId", "rigName", "logicalId", "canonicalSessionName", "nodeKind", "runtime", "podNamespace", "sessionStatus",
+    "intentionallyStopped", "startupStatus", "lifecycleState", "latestError", "needsAttention", "arbitratedNeedsInput", "agentActivity",
+    "activityState", "lastActivityAt", "pendingWorkCount", "inProgressWorkCount", "heldReason",
+  ],
+  activityState: ["activity", "display", "needsInput"],
+  needsInput: ["count", "reason"],
+  agentActivity: ["state", "reason"],
+};
+
+/** Fields of the RigEvent variants the source maps to `x-openrig.event` (and uses for resync decisions). */
+export const REQUIRED_EVENT_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  "queue.created": ["qitemId", "sourceSession", "destinationSession", "summary"],
+  "queue.claimed": ["qitemId", "destinationSession", "summary"],
+  "queue.handed_off": ["qitemId", "fromSession", "toSession", "summary"],
+  "queue.updated": ["qitemId", "fromState", "toState", "closureReason", "actorSession", "summary"],
+  "agent.activity": ["rigId", "nodeId", "sessionName", "activity"],
+  "node.removed": ["rigId", "nodeId"],
+  "rig.deleted": ["rigId"],
+};
+
+export type NodeFieldGroup = "node" | "activityState" | "needsInput" | "agentActivity";
+
 export interface OpenRigSurfaces {
   /** Daemon mounts found in server.ts, as `app.route` / `app.get` prefixes. */
   mounts: string[];
@@ -70,6 +99,10 @@ export interface OpenRigSurfaces {
   };
   /** `RigEvent` discriminant names (`type: "..."`), sorted. */
   rigEventTypes: string[];
+  /** Required daemon node fields found per group (see REQUIRED_NODE_FIELDS), sorted. */
+  nodeFields: Record<NodeFieldGroup, string[]>;
+  /** Required fields found per RigEvent variant (see REQUIRED_EVENT_FIELDS), sorted. */
+  eventFields: Record<string, string[]>;
 }
 
 /** Reads a file of the checkout; replaceable so tests can mutate real sources in memory. */
@@ -182,6 +215,57 @@ export function extractRigEventTypes(typesSource: string): string[] {
   return sorted(names);
 }
 
+function memberNames(members: ts.NodeArray<ts.TypeElement>): string[] {
+  return members.flatMap((m) => (ts.isPropertySignature(m) && (ts.isIdentifier(m.name) || ts.isStringLiteral(m.name)) ? [m.name.text] : []));
+}
+
+function literalMembers(t: ts.TypeNode | undefined, prop: string): ts.TypeNode | undefined {
+  // `T | null` and parenthesised forms: look through to the type literal.
+  if (!t) return undefined;
+  if (ts.isUnionTypeNode(t)) return t.types.map((x) => literalMembers(x, prop)).find(Boolean) ?? t.types.find(ts.isTypeLiteralNode);
+  if (ts.isParenthesizedTypeNode(t)) return literalMembers(t.type, prop);
+  return t;
+}
+
+/** Property names of `NodeInventoryEntry`, of its `activityState` and `activityState.needsInput` literals, and of `AgentActivity`. */
+export function extractNodeFields(typesSource: string): Record<NodeFieldGroup, string[]> {
+  const out: Record<NodeFieldGroup, string[]> = { node: [], activityState: [], needsInput: [], agentActivity: [] };
+  let found = false;
+  walk(parse(typesSource), (n) => {
+    if (!ts.isInterfaceDeclaration(n)) return;
+    if (n.name.text === "AgentActivity") out.agentActivity = memberNames(n.members);
+    if (n.name.text !== "NodeInventoryEntry") return;
+    found = true;
+    out.node = memberNames(n.members);
+    const activity = n.members.find((m): m is ts.PropertySignature => ts.isPropertySignature(m) && ts.isIdentifier(m.name) && m.name.text === "activityState");
+    const lit = literalMembers(activity?.type, "activityState");
+    if (lit && ts.isTypeLiteralNode(lit)) {
+      out.activityState = memberNames(lit.members);
+      const needs = lit.members.find((m): m is ts.PropertySignature => ts.isPropertySignature(m) && ts.isIdentifier(m.name) && m.name.text === "needsInput");
+      if (needs?.type && ts.isTypeLiteralNode(needs.type)) out.needsInput = memberNames(needs.type.members);
+    }
+  });
+  if (!found) throw new Error("domain/types.ts: NodeInventoryEntry not found");
+  const pick = (g: NodeFieldGroup) => sorted(REQUIRED_NODE_FIELDS[g].filter((f) => out[g].includes(f)));
+  return { node: pick("node"), activityState: pick("activityState"), needsInput: pick("needsInput"), agentActivity: pick("agentActivity") };
+}
+
+/** For each RigEvent variant in `names`, which of `fields` its type literal declares. */
+export function extractEventFields(typesSource: string, wanted: Readonly<Record<string, readonly string[]>> = REQUIRED_EVENT_FIELDS): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  walk(parse(typesSource), (n) => {
+    if (!ts.isTypeAliasDeclaration(n) || n.name.text !== "RigEvent") return;
+    const members = ts.isUnionTypeNode(n.type) ? n.type.types : [n.type];
+    for (const m of members) {
+      if (!ts.isTypeLiteralNode(m)) continue;
+      const names = m.members.flatMap((p) => (ts.isPropertySignature(p) && ts.isIdentifier(p.name) && p.name.text === "type" && p.type ? literalNames(p.type) : []));
+      const props = memberNames(m.members);
+      for (const name of names) if (wanted[name]) out[name] = sorted(wanted[name]!.filter((f) => props.includes(f)));
+    }
+  });
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
+}
+
 export function openrigCommit(root: string): string | null {
   try {
     return execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -207,6 +291,8 @@ export function extractSurfaces(root: string, read: ReadSource = (rel) => readFi
       failureStatus: extractStatusMap(read(ROUTE_FILES.transport)),
     },
     rigEventTypes: extractRigEventTypes(read(`${SRC}/domain/types.ts`)),
+    nodeFields: extractNodeFields(read(`${SRC}/domain/types.ts`)),
+    eventFields: extractEventFields(read(`${SRC}/domain/types.ts`)),
   };
 }
 
@@ -256,5 +342,11 @@ export function diffRemovals(snapshot: Snapshot, current: OpenRigSurfaces): stri
     else if (now !== status) problems.push(`transport failure status changed: ${reason} ${status} -> ${now}`);
   }
   for (const t of s.rigEventTypes) if (!current.rigEventTypes.includes(t)) problems.push(`RigEvent variant removed: ${t}`);
+  for (const [group, list] of Object.entries(s.nodeFields ?? {})) {
+    for (const f of list) if (!(current.nodeFields?.[group as NodeFieldGroup] ?? []).includes(f)) problems.push(`node field removed (${group}): ${f}`);
+  }
+  for (const [event, list] of Object.entries(s.eventFields ?? {})) {
+    for (const f of list) if (!(current.eventFields?.[event] ?? []).includes(f)) problems.push(`RigEvent field removed (${event}): ${f}`);
+  }
   return problems;
 }

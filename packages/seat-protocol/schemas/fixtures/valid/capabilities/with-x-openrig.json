@@ -1,0 +1,26 @@
+{
+  "protocol": {
+    "version": "1.0"
+  },
+  "kinds": [
+    "host",
+    "rig",
+    "seat",
+    "attention",
+    "work",
+    "x-openrig.event"
+  ],
+  "extensions": [
+    "x-openrig"
+  ],
+  "extensionVersions": {
+    "x-openrig": "1.0"
+  },
+  "harnesses": [
+    "claude-code"
+  ],
+  "features": {
+    "terminal": false,
+    "x-openrig.text": false
+  }
+}

@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { CORE_KINDS, type Capabilities } from "@openrig-seats/seat-protocol";
+import { type Capabilities } from "@openrig-seats/seat-protocol";
 import { envelope, type Store } from "./store.js";
 
 export interface AppOptions {
@@ -66,7 +66,7 @@ export function createApp(opts: AppOptions): Hono {
     if (kind === undefined) {
       const head = opts.store.cursor(opts.store.head());
       const kinds: Record<string, unknown[]> = {};
-      for (const k of CORE_KINDS) if (opts.enabledKinds().includes(k)) kinds[k] = opts.store.items(k);
+      for (const k of opts.enabledKinds()) kinds[k] = opts.store.items(k);
       return c.json({ cursor: head, kinds });
     }
     if (!opts.enabledKinds().includes(kind)) return c.json({ error: "unknown_kind", message: `kind ${kind} is not served here` }, 404);

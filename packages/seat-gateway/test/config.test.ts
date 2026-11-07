@@ -67,3 +67,16 @@ describe("config", () => {
     expect(() => loadConfig(join(dir, "none"))).toThrow(/not readable/);
   });
 });
+
+describe("xOpenrig config", () => {
+  const base = { tokenFile: "t" };
+  it("defaults to no text and a 2000 event budget", () => {
+    expect(parseConfig(base).xOpenrig).toEqual({ includeText: false, replay: 2000 });
+  });
+  it("accepts includeText and replay, rejects bad values", () => {
+    expect(parseConfig({ ...base, xOpenrig: { includeText: true, replay: 10 } }).xOpenrig).toEqual({ includeText: true, replay: 10 });
+    expect(() => parseConfig({ ...base, xOpenrig: { includeText: "yes" } })).toThrow(/includeText/);
+    expect(() => parseConfig({ ...base, xOpenrig: { replay: -1 } })).toThrow(/replay/);
+    expect(() => parseConfig({ ...base, xOpenrig: [] })).toThrow(/xOpenrig/);
+  });
+});
