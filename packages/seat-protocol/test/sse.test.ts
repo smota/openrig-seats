@@ -62,3 +62,22 @@ describe("parseSSE", () => {
     expect(out[0]!.data).toBe("café");
   });
 });
+
+for (const [name, chunks, options] of [
+  ["unterminated line", ["data: ", "ééé"], { maxLineBytes: 10 }],
+  ["terminated line", ["data: abcdef\n\n"], { maxLineBytes: 10 }],
+  ["event", ["data: ab\ndata: cd\n\n"], { maxEventBytes: 4 }],
+] as const) {
+  it(`rejects an oversized ${name} and cancels the source`, async () => {
+    let cancelled = false;
+    const source = new ReadableStream<Uint8Array>({ start(c) { for (const chunk of chunks) c.enqueue(new TextEncoder().encode(chunk)); }, cancel() { cancelled = true; } });
+    const consume = async () => { for await (const _ of parseSSE(source, options)) { /* consume */ } };
+    await expect(consume()).rejects.toThrow(/limit/i);
+    expect(cancelled).toBe(true);
+  });
+}
+it("resets event limits and preserves normal multi-byte data", async () => {
+  const messages = [];
+  for await (const message of parseSSE(bodyOf(["data: é\n\ndata: ab\n\n"]), { maxLineBytes: 8, maxEventBytes: 2 })) messages.push(message.data);
+  expect(messages).toEqual(["é", "ab"]);
+});

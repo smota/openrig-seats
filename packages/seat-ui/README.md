@@ -82,7 +82,15 @@ against the full JSON Schema 2020-12 declaration with Ajv and standard formats.
 Boolean `true` permits arbitrary JSON; `false` disables submission. Unresolvable
 references fail closed with an explanation; schemas are never fetched remotely.
 The standalone Content Security Policy permits `unsafe-eval` solely because Ajv
-compiles declared schemas at runtime. It permits no inline scripts. A host with
+compiles gateway-declared schemas at runtime using `new Function`. Ajv 8 has no
+non-eval runtime mode; its standalone generator precompiles known schemas at
+build time and cannot cover arbitrary schemas received later from a gateway.
+Replacing Ajv would change the supported validation contract, so `unsafe-eval`
+remains required. It permits no inline scripts. `connect-src` allows only self
+and the configured gateway origin. Validators use a 200-entry LRU; eviction
+removes the schema from Ajv, and disposing a view replaces its Ajv instance.
+Schemas deeper than 32 object/array levels or patterns over 500 characters are
+refused before compilation or native control creation. A host with
 a stricter policy must permit that compilation or action input forms are
 unavailable.
 

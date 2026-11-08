@@ -3,9 +3,57 @@ import addFormats from "ajv-formats";
 import type { ActInput, Action, Json } from "@openrig-seats/seat-protocol";
 import { element, field, record, text } from "./dom.js";
 
-const ajv = new Ajv2020({ strict: false, addUsedSchema: false, allErrors: true, validateFormats: true });
-addFormats.default(ajv);
 type Schema = boolean | Record<string, unknown>;
+function freshAjv(): Ajv2020 {
+  const ajv = new Ajv2020({ strict: false, addUsedSchema: false, allErrors: true, validateFormats: true });
+  addFormats.default(ajv); return ajv;
+}
+function guardSchema(value: unknown, depth = 0): void {
+  if (depth > 32) throw new Error("Schema exceeds 32 levels");
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    if ((key === "pattern" && typeof child === "string" && child.length > 500) ||
+      (key === "patternProperties" && child && typeof child === "object" && Object.keys(child).some((pattern) => pattern.length > 500))) throw new Error("Pattern exceeds 500 characters");
+    guardSchema(child, depth + 1);
+  }
+}
+function stableJSON(value: unknown): string {
+  return JSON.stringify(value, (_key, child: unknown) => child && typeof child === "object" && !Array.isArray(child)
+    ? Object.fromEntries(Object.entries(child).sort(([a], [b]) => a.localeCompare(b))) : child);
+}
+/** Own both caches: evicting a validator also releases Ajv's schema-object cache. */
+export class ActionFormValidators {
+  private ajv = freshAjv();
+  private readonly cache = new Map<string, { schema: Schema; validate: ValidateFunction }>();
+  constructor(private readonly limit = 200) {}
+  get size(): number { return this.cache.size; }
+  compile(schema: Schema): ValidateFunction {
+    guardSchema(schema);
+    const key = stableJSON(schema);
+    let entry = this.cache.get(key);
+    if (entry) this.cache.delete(key);
+    else {
+      try { entry = { schema, validate: this.ajv.compile(schema) }; }
+      catch (error) { this.ajv.removeSchema(schema); throw error; }
+    }
+    this.cache.set(key, entry);
+    if (this.cache.size > this.limit) {
+      const oldest = this.cache.keys().next().value!;
+      this.ajv.removeSchema(this.cache.get(oldest)!.schema); this.cache.delete(oldest);
+    }
+    return entry.validate;
+  }
+  errorsText(validate: ValidateFunction): string { return this.ajv.errorsText(validate.errors, { separator: "; " }); }
+  dispose(): void { this.cache.clear(); this.ajv = freshAjv(); }
+}
+const defaultValidators = new ActionFormValidators();
+function idempotencyKey(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 15) | 64; bytes[8] = (bytes[8]! & 63) | 128;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 type Control = { node: HTMLElement; read: () => unknown };
 
 /** Small, native form subset; everything else gets a JSON editor and the same full validator. */
@@ -67,6 +115,7 @@ function control(schema: Record<string, unknown>, name: string, required: boolea
 export function createActionForm(
   kind: string, id: string, action: Pick<Action, "id" | "label" | "input" | "danger">,
   submit: (input: ActInput) => Promise<unknown>, confirm: (message: string) => boolean = (message) => window.confirm(message),
+  validators: ActionFormValidators = defaultValidators,
 ): HTMLFormElement {
   const form = element("form", undefined, "action-form");
   form.setAttribute("aria-label", action.label); form.noValidate = true;
@@ -74,10 +123,10 @@ export function createActionForm(
   let validate: ValidateFunction | undefined;
   let compileError = "";
   if (action.input !== undefined) {
-    try { validate = ajv.compile(action.input); }
+    try { validate = validators.compile(action.input); }
     catch { compileError = "This input schema cannot be resolved locally. Submission is unavailable."; }
   }
-  const native = typeof action.input === "object" && nativeSchema(action.input);
+  const native = !compileError && typeof action.input === "object" && nativeSchema(action.input);
   const nativeControl = native ? control(action.input as Record<string, unknown>, "input", true) : undefined;
   const json = element("textarea"); json.name = "input-json"; json.rows = 5; json.spellcheck = false;
   json.value = JSON.stringify(typeof action.input === "object" ? action.input.default ?? (action.input.type === "object" ? {} : action.input.type === "array" ? [] : null) : null, null, 2);
@@ -112,12 +161,15 @@ export function createActionForm(
     try {
       if (action.input !== undefined) value = jsonMode ? JSON.parse(json.value) : nativeControl!.read();
       if (validate && !validate(value)) {
-        result.textContent = `Invalid input: ${ajv.errorsText(validate.errors, { separator: "; " })}`; return;
+        result.textContent = `Invalid input: ${validators.errorsText(validate)}`; return;
       }
     } catch { result.textContent = "Invalid input: enter valid JSON."; return; }
     if (action.danger && !confirm(`Run “${action.label}” on ${id}?`)) return;
+    let key: string;
+    try { key = idempotencyKey(); }
+    catch { result.textContent = "Unable to generate a secure submission key. Please try again."; return; }
     pending = true; button.disabled = true; result.textContent = "Submitting…";
-    const input: ActInput = { kind, id, action: action.id, ...(action.input !== undefined ? { input: value as Json } : {}), idempotencyKey: crypto.randomUUID() };
+    const input: ActInput = { kind, id, action: action.id, ...(action.input !== undefined ? { input: value as Json } : {}), idempotencyKey: key };
     try { result.textContent = JSON.stringify(await submit(input), null, 2); }
     catch { result.textContent = "Submission failed. Check the item before submitting again."; }
     finally { pending = false; button.disabled = false; }

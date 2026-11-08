@@ -1,5 +1,5 @@
 import { SeatUI } from "./ui.js";
-import { connectSeat, terminalStream } from "./connection.js";
+import { connectSeat, terminalStream, gatewayURL } from "./connection.js";
 import { element, field } from "./dom.js";
 import "./style.css";
 
@@ -27,9 +27,8 @@ form.addEventListener("submit", (event) => {
   const bearer = token.value.trim();
   let base: URL;
   try {
-    base = new URL(gateway.value, location.href);
-    if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error();
-  } catch { status.textContent = "Enter an HTTP(S) gateway URL without credentials, query parameters or a fragment."; return; }
+    base = gatewayURL(gateway.value);
+  } catch (error) { status.textContent = error instanceof Error ? error.message : "Invalid gateway URL."; return; }
   stop(); const abort = new AbortController(); controller = abort; disconnect.disabled = false; connect.disabled = true;
   status.textContent = "Loading capabilities and snapshot…";
   void connectSeat({
@@ -43,8 +42,8 @@ form.addEventListener("submit", (event) => {
     },
     item: (item) => view?.apply(item),
     status: (message) => { if (!abort.signal.aborted) status.textContent = message; },
-  }).catch(() => {
-    if (!abort.signal.aborted) { status.textContent = "Connection failed. Check the gateway URL, bearer token and allowed origin configuration."; connect.disabled = false; }
+  }).catch((error: unknown) => {
+    if (!abort.signal.aborted) { status.textContent = error instanceof RangeError ? error.message : "Connection failed. Check the gateway URL, bearer token and allowed origin configuration."; connect.disabled = false; }
   });
 });
 fixtures.addEventListener("click", async () => {

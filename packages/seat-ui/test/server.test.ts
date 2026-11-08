@@ -76,3 +76,28 @@ it("serves static HTML without bearer and permits schema compilation without inl
   expect(policy).toContain("script-src 'self' 'unsafe-eval'"); expect(policy).not.toContain("unsafe-inline");
   expect(response.headers.get("cache-control")).toBe("no-store");
 });
+
+it("buffers eight terminal frames before disconnecting a slow viewer", async () => {
+  const socket = new Socket();
+  const handle = createSeatUIHandler({ fetch: async () => Response.json(caps), connectTerminal: () => socket });
+  const response = await handle(request("/gateway/terminal/s", { headers: { ...auth, accept: "application/x-seat-terminal" } }));
+  for (let i = 0; i < 8; i++) socket.emit("message", Buffer.from(String(i)), false);
+  expect(socket.stopped).toBe(false);
+  socket.emit("message", Buffer.from("overflow"), false); expect(socket.stopped).toBe(true);
+  await response.body!.cancel();
+});
+it("limits connect-src to self and the configured gateway origin", async () => {
+  const handle = createSeatUIHandler({ gatewayUrl: "https://gateway.example.test/path", rootDir: new URL("..", import.meta.url).pathname });
+  const policy = (await handle(request("/"))).headers.get("content-security-policy")!;
+  expect(policy).toContain("connect-src 'self' https://gateway.example.test;");
+  expect(() => createSeatUIHandler({ gatewayUrl: "http://gateway.example.test" })).toThrow(/HTTPS/);
+});
+
+it("cancels oversized capabilities before opening a terminal", async () => {
+  let cancelled = false;
+  const source = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(4 * 1024 * 1024 + 1)); }, cancel() { cancelled = true; } });
+  const connect = vi.fn();
+  const handle = createSeatUIHandler({ fetch: async () => new Response(source), connectTerminal: connect });
+  const response = await handle(request("/gateway/terminal/s", { headers: { ...auth, accept: "application/x-seat-terminal" } }));
+  expect(response.status).toBe(502); expect(cancelled).toBe(true); expect(connect).not.toHaveBeenCalled();
+});

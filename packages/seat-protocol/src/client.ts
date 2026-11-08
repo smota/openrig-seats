@@ -1,4 +1,4 @@
-import { parseSSE } from "./sse.js";
+import { parseSSE, SSELimitError } from "./sse.js";
 import type { ActResponse, Capabilities, StreamControl, StreamEnvelope } from "./types.generated.js";
 import type { StreamItem } from "./kinds.js";
 
@@ -195,7 +195,7 @@ export class SeatClient {
         }
       } catch (err) {
         if (signal?.aborted) return;
-        if (err instanceof SeatClientError) throw err;
+        if (err instanceof SeatClientError || err instanceof SSELimitError) throw err;
         ended = err;
       } finally {
         signal?.removeEventListener("abort", onAbort);

@@ -10,10 +10,25 @@ const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; cha
 const fail = (status, message) => new Response(message, { status, headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8", "x-content-type-options": "nosniff" } });
 const upstreamURL = (base, path) => new URL(base.href.replace(/\/$/, "") + path);
 
+async function limitedJSON(response, maxBytes = 4 * 1024 * 1024) {
+  if (!response.body) throw new Error("Missing JSON body");
+  const reader = response.body.getReader(); const chunks = []; let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) throw new Error("The source sent too much data");
+      chunks.push(Buffer.from(value));
+    }
+  } finally { void reader.cancel().catch(() => {}); reader.releaseLock(); }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
 /** Fixed-target, same-origin adapter. No bearer is retained beyond its request/terminal connection. */
 export function createSeatUIHandler({ gatewayUrl = "http://127.0.0.1:8088", rootDir = fileURLToPath(new URL("./dist", import.meta.url)), fetch: fetcher = globalThis.fetch, connectTerminal = (url, options) => new WebSocket(url, options) } = {}) {
   const base = new URL(gatewayUrl);
   if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error("SEAT_GATEWAY_URL must be a fixed HTTP(S) URL without credentials or query");
+  if (base.protocol === "http:" && !LOOPBACK.test(base.host)) throw new Error("Use HTTPS for gateways outside the loopback interface");
   let viewers = 0;
   const root = resolve(rootDir);
   const requestUpstream = async (url, init) => {
@@ -43,7 +58,7 @@ export function createSeatUIHandler({ gatewayUrl = "http://127.0.0.1:8088", root
         try {
           const res = await requestUpstream(upstreamURL(base, "/capabilities"), { headers: { authorization, accept: "application/json" }, signal: request.signal });
           if (!res.ok) { await res.body?.cancel(); return fail(res.status, "Terminal authorization refused"); }
-          caps = await res.json();
+          caps = await limitedJSON(res);
         } catch { return fail(502, "Gateway unavailable"); }
         const descriptor = caps?.terminal;
         if (caps?.features?.terminal !== true || descriptor?.transport !== "websocket" || descriptor?.readOnly !== true || descriptor?.path !== "/terminal/{seatId}" || descriptor?.output !== "ansi-text" || !Array.isArray(descriptor.clientFrames) || !descriptor.clientFrames.includes("scroll")) return fail(404, "Terminal not advertised");
@@ -76,7 +91,7 @@ export function createSeatUIHandler({ gatewayUrl = "http://127.0.0.1:8088", root
             socket.on("close", cleanup); socket.on("error", cleanup);
           },
           cancel: cleanup,
-        }, { highWaterMark: 1 });
+        }, { highWaterMark: 8 });
         return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
       }
       if (!allowed && !act) return fail(404, "Route not available");
@@ -105,7 +120,7 @@ export function createSeatUIHandler({ gatewayUrl = "http://127.0.0.1:8088", root
     if (!path.startsWith(root + sep)) return fail(404, "Not found");
     const mime = MIME[extname(path)]; if (!mime) return fail(404, "Not found");
     try {
-      return new Response(await readFile(path), { headers: { "content-type": mime, "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; connect-src 'self' http: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" } });
+      return new Response(await readFile(path), { headers: { "content-type": mime, "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "content-security-policy": `default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; connect-src 'self' ${base.origin}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'` } });
     } catch { return fail(404, "Build the UI first"); }
   };
 }

@@ -1,8 +1,8 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ActInput, Capabilities } from "@openrig-seats/seat-protocol";
-import { createActionForm } from "../src/forms.js";
+import type { ActInput, Capabilities, Json } from "@openrig-seats/seat-protocol";
+import { createActionForm, ActionFormValidators } from "../src/forms.js";
 import { fixtureData } from "../src/fixtures.js";
 import { SeatUI } from "../src/ui.js";
 
@@ -14,7 +14,7 @@ function ui(capabilities = caps()) {
   const root = document.createElement("div"); document.body.append(root); roots.push(root);
   return { root, ui: new SeatUI(root, { capabilities, act: async (input) => ({ idempotencyKey: input.idempotencyKey!, status: "completed", replayed: false }) }) };
 }
-afterEach(() => { for (const root of roots.splice(0)) root.remove(); vi.restoreAllMocks(); });
+afterEach(() => { for (const root of roots.splice(0)) root.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("valid schema fixtures", () => {
   for (const kind of ["host", "rig", "seat", "turn", "attention", "work"]) {
@@ -152,4 +152,73 @@ it("disables unresolved remote schema references without fetching them", () => {
   const form = createActionForm("work", "w", { id: "remote", label: "Remote", input: { $ref: "https://example.test/unavailable.json" } }, async () => ({}));
   expect(form.querySelector("button")!.disabled).toBe(true); expect(form.textContent).toContain("cannot be resolved locally");
   expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("bounds validators while distinct-schema entities are added and deleted", () => {
+  const { ui: view } = ui({ ...caps(), features: { act: true } });
+  for (let i = 0; i < 250; i++) {
+    view.apply({ cursor: String(i), kind: "x-example.item", id: String(i), op: "upsert", data: { id: String(i), actions: [{ id: "go", label: "Go", input: { type: "string", minLength: i } }] } });
+    view.apply({ cursor: String(i), kind: "x-example.item", id: String(i), op: "delete" });
+  }
+  const cache = (view as unknown as { validators: ActionFormValidators }).validators;
+  expect(cache.size).toBe(200);
+  const internal = cache as unknown as { ajv: { _cache: Map<unknown, unknown> } };
+  const previousAjv = internal.ajv;
+  const freshSize = (new ActionFormValidators() as unknown as typeof internal).ajv._cache.size;
+  expect(previousAjv._cache.size).toBeLessThanOrEqual(freshSize + 200);
+  view.dispose(); expect(cache.size).toBe(0);
+  expect(internal.ajv).not.toBe(previousAjv);
+  expect(internal.ajv._cache.size).toBe(freshSize);
+});
+it("reuses stable schemas and evicts the least recently used validator", () => {
+  const cache = new ActionFormValidators(2);
+  const first = cache.compile({ type: "string", minLength: 1 });
+  expect(cache.compile({ minLength: 1, type: "string" })).toBe(first);
+  cache.compile({ type: "number" }); cache.compile({ type: "string", minLength: 1 }); cache.compile({ type: "boolean" });
+  expect(cache.size).toBe(2);
+  expect(cache.compile({ type: "string", minLength: 1 })).toBe(first);
+  cache.dispose(); expect(cache.compile({ type: "string", minLength: 1 })).not.toBe(first);
+});
+it("prunes old action ids on a surviving entity", () => {
+  const { ui: view } = ui({ ...caps(), features: { act: true } });
+  for (let i = 0; i < 100; i++) view.apply({ cursor: String(i), kind: "x-example.item", id: "one", op: "upsert", data: { id: "one", actions: [{ id: String(i), label: "Go" }] } });
+  expect((view as unknown as { forms: Map<string, unknown> }).forms.size).toBe(1);
+});
+it("falls back to random bytes when randomUUID is unavailable", async () => {
+  vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+  const submit = vi.fn(async (_input: ActInput) => ({}));
+  const form = createActionForm("seat", "s", { id: "go", label: "Go" }, submit);
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalled());
+  expect(submit.mock.calls[0]![0]).toMatchObject({ idempotencyKey: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) });
+});
+it("rejects long patterns and deeply nested schemas before compilation", () => {
+  let deep: { [key: string]: Json } = { type: "string" };
+  for (let i = 0; i < 33; i++) deep = { type: "array", items: deep };
+  for (const input of [{ type: "string", pattern: "a".repeat(501) }, deep]) {
+    const form = createActionForm("seat", "s", { id: "go", label: "Go", input }, async () => ({}));
+    expect(form.querySelector("button")!.disabled).toBe(true);
+    expect(form.querySelector("input[pattern]")).toBeNull();
+  }
+});
+
+it("prunes actions for entities outside the selected seat detail", () => {
+  const { ui: view } = ui({ ...caps(), features: { act: true } });
+  view.snapshot({ cursor: "s", kinds: { seat: [{ id: "s1" }, { id: "s2" }], work: [{ id: "w", assigneeSeatId: "s2", actions: [{ id: "old", label: "Old" }] }] } });
+  view.selectSeat("s1");
+  view.apply({ cursor: "n", kind: "work", id: "w", op: "upsert", data: { id: "w", assigneeSeatId: "s2", actions: [{ id: "new", label: "New" }] } });
+  expect([...((view as unknown as { forms: Map<string, unknown> }).forms.keys())]).not.toContain(JSON.stringify(["work", "w", "old"]));
+});
+
+it("leaves a form usable when secure key generation fails", async () => {
+  const random = vi.fn(() => { throw new Error("unavailable"); });
+  vi.stubGlobal("crypto", { getRandomValues: random });
+  const submit = vi.fn(async (_input: ActInput) => ({}));
+  const form = createActionForm("seat", "s", { id: "go", label: "Go" }, submit);
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  expect(form.querySelector("button")!.disabled).toBe(false);
+  expect(form.textContent).toContain("secure submission key");
+  random.mockImplementation((() => new Uint8Array(16)) as never);
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
 });

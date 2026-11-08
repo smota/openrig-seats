@@ -59,3 +59,25 @@ it("reads terminal text using only bearer and a numeric scroll header", async ()
   expect(init?.headers).toEqual({ authorization: "Bearer secret", accept: "application/x-seat-terminal", "x-seat-ui-scroll-offset": "12" });
   expect(output).toEqual(["<script>inert</script>"]);
 });
+
+for (const route of ["capabilities", "snapshot", "stream", "terminal"]) {
+  it(`cancels oversized ${route} data and reports a clear notice`, async () => {
+    let cancelled = false;
+    const source = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode("x".repeat(4 * 1024 * 1024 + 1))); }, cancel() { cancelled = true; } });
+    const fetcher: typeof fetch = async (url) => {
+      if (String(url).includes(`/${route}`)) return new Response(source);
+      if (String(url).endsWith("/capabilities")) return Response.json(caps);
+      return Response.json({ cursor: "s", kinds: {} });
+    };
+    const signal = new AbortController().signal;
+    const operation = route === "terminal" ? terminalStream("/gateway", "/terminal/s", "t", "s", 0, () => {}, signal, fetcher)
+      : connectSeat({ baseUrl: "/gateway", token: "t", signal, fetch: fetcher, ready: () => {}, item: () => {} });
+    await expect(operation).rejects.toThrow(/source sent too much data/i);
+    expect(cancelled).toBe(true);
+  });
+}
+it("refuses non-loopback plaintext gateway URLs before sending credentials", async () => {
+  const fetcher = vi.fn();
+  await expect(connectSeat({ baseUrl: "http://example.com", token: "t", signal: new AbortController().signal, fetch: fetcher, ready: () => {}, item: () => {} })).rejects.toThrow(/HTTPS/);
+  expect(fetcher).not.toHaveBeenCalled();
+});

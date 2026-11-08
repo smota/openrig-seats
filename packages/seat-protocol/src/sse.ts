@@ -1,3 +1,5 @@
+export class SSELimitError extends RangeError {}
+
 /** One parsed server-sent event (WHATWG SSE field semantics, as EventSource exposes them). */
 export interface SSEMessage {
   /** `event:` field; "message" when absent. */
@@ -16,9 +18,19 @@ export interface SSEMessage {
 export interface ParseSSEOptions {
   /** Called as soon as a valid `retry:` field is read, including in blocks that carry no data. */
   onRetry?: (ms: number) => void;
+  /** Maximum UTF-8 bytes per line, excluding its terminator. Default 1 MiB. */
+  maxLineBytes?: number;
+  /** Maximum UTF-8 bytes in joined event data. Default 4 MiB. */
+  maxEventBytes?: number;
 }
 
 export async function* parseSSE(body: ReadableStream<Uint8Array>, options: ParseSSEOptions = {}): AsyncGenerator<SSEMessage> {
+  const maxLineBytes = options.maxLineBytes ?? 1024 * 1024;
+  const maxEventBytes = options.maxEventBytes ?? 4 * 1024 * 1024;
+  if (![maxLineBytes, maxEventBytes].every((n) => Number.isSafeInteger(n) && n > 0)) throw new RangeError("SSE limits must be positive integers");
+  const encoder = new TextEncoder();
+  let lineBytes = 0;
+  let eventBytes = 0;
   const reader = body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
@@ -36,6 +48,7 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>, options: Parse
       : null;
     event = "";
     data = [];
+    eventBytes = 0;
     retry = undefined;
     return msg;
   };
@@ -48,7 +61,11 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>, options: Parse
     let value = idx < 0 ? "" : line.slice(idx + 1);
     if (value.startsWith(" ")) value = value.slice(1);
     if (field === "event") event = value;
-    else if (field === "data") data.push(value);
+    else if (field === "data") {
+      eventBytes += encoder.encode(value).byteLength + (data.length ? 1 : 0);
+      if (eventBytes > maxEventBytes) throw new SSELimitError("SSE event byte limit exceeded");
+      data.push(value);
+    }
     else if (field === "id") {
       if (!value.includes("\0")) lastEventId = value;
     } else if (field === "retry" && /^\d+$/.test(value)) {
@@ -62,6 +79,11 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>, options: Parse
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      // Count raw bytes before decoding or retaining any unterminated text.
+      for (const byte of value) {
+        if (byte === 10 || byte === 13) lineBytes = 0;
+        else if (++lineBytes > maxLineBytes) throw new SSELimitError("SSE line byte limit exceeded");
+      }
       let text = decoder.decode(value, { stream: true });
       if (text.length === 0) continue; // an empty chunk changes nothing, in particular not a pending CR
       if (first) {
@@ -87,7 +109,7 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>, options: Parse
     // A stream that ends mid-event never dispatches it (as EventSource).
   } finally {
     // Ending early (the consumer broke out, or an error): close the underlying connection.
-    await reader.cancel().catch(() => {});
+    void reader.cancel().catch(() => {});
     reader.releaseLock?.();
   }
 }

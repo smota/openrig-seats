@@ -1,6 +1,6 @@
 import { Mirror, isCoreKind, isStreamControl, toGenericCard, type ActInput, type Action, type Capabilities, type StreamItem } from "@openrig-seats/seat-protocol";
 import { element, field, record, text } from "./dom.js";
-import { createActionForm } from "./forms.js";
+import { createActionForm, ActionFormValidators } from "./forms.js";
 
 export interface Snapshot { cursor: string; kinds: Record<string, Record<string, unknown>[]> }
 export interface UIOptions {
@@ -13,6 +13,7 @@ export interface UIOptions {
 export class SeatUI {
   readonly mirror = new Mirror();
   cursor: string | undefined;
+  private readonly validators = new ActionFormValidators();
   private selected: string | undefined;
   private readonly forms = new Map<string, { signature: string; node: HTMLFormElement }>();
   private terminalNode: HTMLElement | undefined;
@@ -39,7 +40,7 @@ export class SeatUI {
     this.render();
   }
   selectSeat(id: string): void { this.selected = id; this.render(); }
-  dispose(): void { this.terminalAbort?.abort(); this.forms.clear(); this.root.replaceChildren(); }
+  dispose(): void { this.terminalAbort?.abort(); this.forms.clear(); this.validators.dispose(); this.root.replaceChildren(); }
 
   private actionForms(kind: string, item: Record<string, unknown>): HTMLElement {
     const box = element("div", undefined, "actions");
@@ -55,7 +56,7 @@ export class SeatUI {
       const signature = JSON.stringify(action);
       let cached = this.forms.get(key);
       if (cached?.signature !== signature) {
-        cached = { signature, node: createActionForm(kind, String(item.id), action, this.options.act) }; this.forms.set(key, cached);
+        cached = { signature, node: createActionForm(kind, String(item.id), action, this.options.act, undefined, this.validators) }; this.forms.set(key, cached);
       }
       box.append(cached.node);
     }
@@ -125,7 +126,7 @@ export class SeatUI {
         this.terminalAbort?.abort(); const abort = new AbortController(); this.terminalAbort = abort;
         output.textContent = "Waiting for output…";
         void this.options.terminal!(seatId, value, (value) => { if (!abort.signal.aborted) output.textContent = value; }, abort.signal)
-          .catch(() => { if (!abort.signal.aborted) status.textContent = "Terminal connection unavailable. Choose the offset again to reconnect."; });
+          .catch((error: unknown) => { if (!abort.signal.aborted) status.textContent = error instanceof RangeError ? error.message : "Terminal connection unavailable. Choose the offset again to reconnect."; });
       };
       scroll.addEventListener("click", open);
       panel.append(field("Lines above live output (0 = live)", offset), scroll); open();
@@ -154,8 +155,17 @@ export class SeatUI {
     for (const kind of this.mirror.kinds().filter((k) => !isCoreKind(k))) detail.append(this.section(kind, kind, this.mirror.list(kind)));
     // Selected-seat forms live only in detail; do not move one node into two simultaneous views.
     if (seat) for (const card of list.querySelectorAll<HTMLElement>('[data-kind="seat"]')) if (card.dataset.id === this.selected) card.querySelector(".actions")?.replaceChildren();
-    const live = new Set(this.mirror.kinds().flatMap((kind) => this.mirror.list(kind).map((item) => JSON.stringify([kind, item.id]))));
-    for (const key of this.forms.keys()) { const [kind, id] = JSON.parse(key) as string[]; if (!live.has(JSON.stringify([kind, id]))) this.forms.delete(key); }
+    const live = new Set<string>();
+    for (const kind of this.mirror.kinds()) for (const item of this.mirror.list(kind)) {
+      if (this.options.capabilities.features.act !== true) continue;
+      const actions = new Set((this.options.capabilities.actions ?? []).filter((declaration) => declaration.kind === kind).map((declaration) => declaration.action.id));
+      for (const value of Array.isArray(item.actions) ? item.actions : []) {
+        const action = record(value);
+        if (typeof action.id === "string" && typeof action.label === "string") actions.add(action.id);
+      }
+      for (const action of actions) live.add(JSON.stringify([kind, item.id, action]));
+    }
+    for (const key of this.forms.keys()) if (!live.has(key)) this.forms.delete(key);
     this.content.replaceChildren(list, detail);
     if (active?.isConnected) {
       active.focus({ preventScroll: true });
