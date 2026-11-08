@@ -18,27 +18,27 @@ export function gatewayURL(value: string): URL {
   if (url.protocol === "http:" && !/^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(url.hostname)) throw new Error("Use HTTPS for gateways outside the loopback interface.");
   return url;
 }
-async function limitedJSONResponse(res: Response): Promise<Response> {
+export async function limitedJSONResponse(res: Response, maxBytes = MAX_JSON_BYTES): Promise<Response> {
   if (!res.body) return res;
   const reader = res.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read(); if (done) break;
       size += value.byteLength;
-      if (size > MAX_JSON_BYTES) throw new RangeError(OVERSIZE_NOTICE);
+      if (size > maxBytes) throw new RangeError(OVERSIZE_NOTICE);
       chunks.push(value);
     }
   } finally { void reader.cancel().catch(() => {}); reader.releaseLock(); }
   const bytes = new Uint8Array(size); let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return new Response(bytes, { status: res.status, statusText: res.statusText, headers: res.headers });
+  return new Response([204, 205, 304].includes(res.status) ? null : bytes, { status: res.status, statusText: res.statusText, headers: res.headers });
 }
 /** Header-only auth, atomic full snapshot then cursor-resumed stream. */
 export async function connectSeat(options: ConnectionOptions): Promise<void> {
   gatewayURL(options.baseUrl);
   const f: typeof fetch = async (url, init) => {
     const res = await (options.fetch ?? globalThis.fetch)(url, { ...init, redirect: "error", credentials: "omit", cache: "no-store" });
-    return /\/(capabilities|snapshot)$/.test(String(url)) ? limitedJSONResponse(res) : res;
+    return /\/(capabilities|snapshot|act)$/.test(String(url)) ? limitedJSONResponse(res, String(url).endsWith("/act") ? 1024 * 1024 : MAX_JSON_BYTES) : res;
   };
   const base = options.baseUrl.replace(/\/+$/, "");
   const client = createSeatClient({ baseUrl: base, token: options.token, fetch: f });
@@ -51,7 +51,7 @@ export async function connectSeat(options: ConnectionOptions): Promise<void> {
   if (options.signal.aborted) return;
   options.ready(capabilities, snapshot, (input) => client.act(input, options.signal));
   options.status?.("Connected");
-  try { for await (const item of client.stream({ cursor: snapshot.cursor, signal: options.signal, onReconnect: () => options.status?.("Reconnecting…") })) {
+  try { for await (const item of client.stream({ cursor: snapshot.cursor, maxLineBytes: 1024 * 1024, maxEventBytes: 4 * 1024 * 1024, signal: options.signal, onReconnect: () => options.status?.("Reconnecting…") })) {
     if (options.signal.aborted) return;
     options.item(item); options.status?.("Connected");
   } } catch (error) {
@@ -61,14 +61,16 @@ export async function connectSeat(options: ConnectionOptions): Promise<void> {
 }
 
 /** Adapter only for the bundled standalone server; the declared upstream path stays unchanged. */
-export async function terminalStream(base: string, path: string, token: string, seatId: string, offset: number, output: (value: string) => void, signal: AbortSignal, f: typeof fetch = globalThis.fetch): Promise<void> {
+export async function terminalStream(base: string, path: string, token: string, seatId: string, offset: number, output: (value: string) => void, signal: AbortSignal, f: typeof fetch = globalThis.fetch, maxFrameBytes = 1024 * 1024): Promise<void> {
   gatewayURL(base);
   const res = await f(base.replace(/\/$/, "") + path.replace("{seatId}", encodeURIComponent(seatId)), {
     headers: { authorization: `Bearer ${token}`, accept: "application/x-seat-terminal", "x-seat-ui-scroll-offset": String(offset) },
     redirect: "error", credentials: "omit", cache: "no-store", signal,
   });
   if (!res.ok || !res.body) throw new Error("Terminal unavailable");
-  try { for await (const event of parseSSE(res.body)) {
+  // JSON escaping can expand each raw frame byte to six ASCII bytes; allow SSE framing too.
+  const maxEncodedBytes = Math.min(maxFrameBytes, 1024 * 1024) * 6 + 64;
+  try { for await (const event of parseSSE(res.body, { maxLineBytes: maxEncodedBytes, maxEventBytes: maxEncodedBytes })) {
     const value: unknown = JSON.parse(event.data);
     if (typeof value === "string") output(value);
   } } catch (error) {

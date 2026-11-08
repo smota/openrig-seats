@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { terminalStream } from "../src/connection.js";
 import { createSeatUIHandler } from "../server.mjs";
 
 const auth = { authorization: "Bearer private" };
@@ -100,4 +101,15 @@ it("cancels oversized capabilities before opening a terminal", async () => {
   const handle = createSeatUIHandler({ fetch: async () => new Response(source), connectTerminal: connect });
   const response = await handle(request("/gateway/terminal/s", { headers: { ...auth, accept: "application/x-seat-terminal" } }));
   expect(response.status).toBe(502); expect(cancelled).toBe(true); expect(connect).not.toHaveBeenCalled();
+});
+
+it("passes a 256 KiB all-ESC terminal frame through the bridge and browser parser", async () => {
+  const socket = new Socket(); const abort = new AbortController(); const frame = "\u001b".repeat(256 * 1024); const output: string[] = [];
+  const handle = createSeatUIHandler({ fetch: async () => Response.json({ ...caps, terminal: { ...caps.terminal, maxFrameBytes: 256 * 1024 } }), connectTerminal: () => socket });
+  const fetcher: typeof fetch = async (url, init) => {
+    const response = await handle(request(String(url), init));
+    socket.emit("open"); socket.emit("message", Buffer.from(frame), false); return response;
+  };
+  await terminalStream("/gateway", "/terminal/{seatId}", "private", "s", 0, (text) => { output.push(text); abort.abort(); }, abort.signal, fetcher, 256 * 1024);
+  expect(output).toEqual([frame]); expect(socket.frames).toEqual(['{"type":"scroll","offset":0}']);
 });

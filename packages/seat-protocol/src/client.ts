@@ -1,4 +1,4 @@
-import { parseSSE, SSELimitError } from "./sse.js";
+import { parseSSE, SSELimitError, type ParseSSEOptions } from "./sse.js";
 import type { ActResponse, Capabilities, StreamControl, StreamEnvelope } from "./types.generated.js";
 import type { StreamItem } from "./kinds.js";
 
@@ -32,7 +32,7 @@ export interface SeatClientOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-export interface StreamOptions {
+export interface StreamOptions extends Pick<ParseSSEOptions, "maxLineBytes" | "maxEventBytes"> {
   /** Resume after this cursor. */
   cursor?: string;
   signal?: AbortSignal;
@@ -159,7 +159,7 @@ export class SeatClient {
           await res.body?.cancel().catch(() => {});
           throw new Error(`stream failed: HTTP ${res.status}`);
         }
-        for await (const msg of parseSSE(res.body, { onRetry: (ms) => (serverRetryMs = ms) })) {
+        for await (const msg of parseSSE(res.body, { maxLineBytes: options.maxLineBytes, maxEventBytes: options.maxEventBytes, onRetry: (ms) => (serverRetryMs = ms) })) {
           failures = 0;
           if (msg.event === "control") {
             let control: unknown;

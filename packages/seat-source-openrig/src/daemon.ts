@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { parseSSE } from "@openrig-seats/seat-protocol";
+import { parseSSE, type ParseSSEOptions } from "@openrig-seats/seat-protocol";
 import { ROUTES } from "./routes.js";
 
 export class DaemonError extends Error {
@@ -124,8 +124,9 @@ export class DaemonClient {
   /**
    * Opens the events stream. `replay` is always sent: the budget (newest N daemon events, all types) on a cold
    * start, 0 when resuming with `lastSeq`, which also sends Last-Event-ID so the daemon replays what was missed. Yields until the connection ends; the caller decides what a gap means.
+   * SSE byte limits are opt-in through `limits`; the default preserves unlimited library streams.
    */
-  async *events(opts: { lastSeq?: number | null; replay?: number; signal?: AbortSignal; onOpen?: () => void } = {}): AsyncGenerator<DaemonEvent> {
+  async *events(opts: { lastSeq?: number | null; replay?: number; signal?: AbortSignal; onOpen?: () => void; limits?: ParseSSEOptions } = {}): AsyncGenerator<DaemonEvent> {
     const res = await this.f(this.base + ROUTES.events(opts.lastSeq !== null && opts.lastSeq !== undefined ? 0 : Math.max(0, Math.floor(opts.replay ?? 0))), {
       method: "GET",
       redirect: "error",
@@ -141,7 +142,7 @@ export class DaemonClient {
       throw new DaemonError(`events stream refused: HTTP ${res.status}`, res.status);
     }
     opts.onOpen?.();
-    for await (const msg of parseSSE(res.body)) {
+    for await (const msg of parseSSE(res.body, opts.limits)) {
       let parsed: unknown;
       try {
         parsed = JSON.parse(msg.data);

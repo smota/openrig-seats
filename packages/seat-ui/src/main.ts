@@ -37,7 +37,7 @@ form.addEventListener("submit", (event) => {
       if (abort.signal.aborted) return;
       const localBridge = base.origin === location.origin && base.pathname.replace(/\/$/, "") === "/gateway";
       view = new SeatUI(content, { capabilities, act,
-        ...(localBridge && capabilities.terminal ? { terminal: (id, offset, output, signal) => terminalStream(base.href, capabilities.terminal!.path, bearer, id, offset, output, signal) } : {}),
+        ...(localBridge && capabilities.terminal ? { terminal: (id, offset, output, signal) => terminalStream(base.href, capabilities.terminal!.path, bearer, id, offset, output, signal, globalThis.fetch, capabilities.terminal!.maxFrameBytes) } : {}),
       }); view.snapshot(snapshot);
     },
     item: (item) => view?.apply(item),

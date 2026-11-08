@@ -222,3 +222,17 @@ it("leaves a form usable when secure key generation fails", async () => {
   form.dispatchEvent(new Event("submit", { cancelable: true }));
   await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
 });
+
+it("replaces Ajv periodically so evicted nested schema IDs cannot accumulate", () => {
+  const cache = new ActionFormValidators(2);
+  const internals = cache as unknown as { ajv: { refs: Record<string, unknown> } };
+  const original = internals.ajv; const baseline = Object.keys(original.refs).length;
+  for (let i = 0; i < 302; i++) {
+    const validate = cache.compile({ type: "object", properties: { value: { $id: `https://example.test/nested/${i}`, type: "string" } } });
+    expect(validate({ value: "ok" })).toBe(true);
+    expect(Object.keys(internals.ajv.refs).length).toBeLessThanOrEqual(baseline + 102);
+  }
+  expect(internals.ajv).not.toBe(original); expect(cache.size).toBe(2);
+  const retained = cache.compile({ type: "object", properties: { value: { $id: "https://example.test/nested/301", type: "string" } } });
+  expect(retained({ value: 1 })).toBe(false);
+});

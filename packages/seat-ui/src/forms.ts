@@ -24,6 +24,7 @@ function stableJSON(value: unknown): string {
 /** Own both caches: evicting a validator also releases Ajv's schema-object cache. */
 export class ActionFormValidators {
   private ajv = freshAjv();
+  private evictions = 0;
   private readonly cache = new Map<string, { schema: Schema; validate: ValidateFunction }>();
   constructor(private readonly limit = 200) {}
   get size(): number { return this.cache.size; }
@@ -40,11 +41,17 @@ export class ActionFormValidators {
     if (this.cache.size > this.limit) {
       const oldest = this.cache.keys().next().value!;
       this.ajv.removeSchema(this.cache.get(oldest)!.schema); this.cache.delete(oldest);
+      if (++this.evictions >= 100) {
+        // removeSchema does not release every nested $id reference. Rebuild periodically.
+        const ajv = freshAjv();
+        for (const cached of this.cache.values()) cached.validate = ajv.compile(cached.schema);
+        this.ajv = ajv; this.evictions = 0;
+      }
     }
     return entry.validate;
   }
   errorsText(validate: ValidateFunction): string { return this.ajv.errorsText(validate.errors, { separator: "; " }); }
-  dispose(): void { this.cache.clear(); this.ajv = freshAjv(); }
+  dispose(): void { this.cache.clear(); this.ajv = freshAjv(); this.evictions = 0; }
 }
 const defaultValidators = new ActionFormValidators();
 function idempotencyKey(): string {

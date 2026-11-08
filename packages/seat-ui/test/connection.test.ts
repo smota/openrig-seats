@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ActInput, Capabilities, StreamItem } from "@openrig-seats/seat-protocol";
-import { connectSeat, terminalStream } from "../src/connection.js";
+import { connectSeat, limitedJSONResponse, terminalStream } from "../src/connection.js";
 
 const caps: Capabilities = { protocol: { version: "1.0" }, kinds: ["seat"], extensions: [], harnesses: [], features: {} };
 const sse = (data: string) => new Response(new TextEncoder().encode(data), { headers: { "content-type": "text/event-stream" } });
@@ -63,7 +63,7 @@ it("reads terminal text using only bearer and a numeric scroll header", async ()
 for (const route of ["capabilities", "snapshot", "stream", "terminal"]) {
   it(`cancels oversized ${route} data and reports a clear notice`, async () => {
     let cancelled = false;
-    const source = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode("x".repeat(4 * 1024 * 1024 + 1))); }, cancel() { cancelled = true; } });
+    const source = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode("x".repeat(route === "terminal" ? 6 * 1024 * 1024 + 65 : 4 * 1024 * 1024 + 1))); }, cancel() { cancelled = true; } });
     const fetcher: typeof fetch = async (url) => {
       if (String(url).includes(`/${route}`)) return new Response(source);
       if (String(url).endsWith("/capabilities")) return Response.json(caps);
@@ -81,3 +81,24 @@ it("refuses non-loopback plaintext gateway URLs before sending credentials", asy
   await expect(connectSeat({ baseUrl: "http://example.com", token: "t", signal: new AbortController().signal, fetch: fetcher, ready: () => {}, item: () => {} })).rejects.toThrow(/HTTPS/);
   expect(fetcher).not.toHaveBeenCalled();
 });
+
+for (const status of [204, 304]) {
+  it(`preserves a bodyless HTTP ${status} response`, async () => {
+    const response = await limitedJSONResponse({ body: new ReadableStream({ start(c) { c.close(); } }), status, statusText: "", headers: new Headers() } as Response);
+    expect(response.status).toBe(status); expect(response.body).toBeNull();
+  });
+}
+for (const status of [200, 400, 503]) {
+  it(`caps and cancels HTTP ${status} action response bodies at 1 MiB`, async () => {
+    const abort = new AbortController(); let cancelled = 0; let action: Promise<unknown> | undefined;
+    const fetcher: typeof fetch = async (url) => {
+      if (String(url).endsWith("/capabilities")) return Response.json(caps);
+      if (String(url).endsWith("/snapshot")) return Response.json({ cursor: "s", kinds: {} });
+      if (String(url).endsWith("/act")) { return new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(1024 * 1024 + 1)); }, cancel() { cancelled++; } }), { status }); }
+      abort.abort(); return sse("");
+    };
+    await connectSeat({ baseUrl: "/gateway", token: "t", signal: abort.signal, fetch: fetcher,
+      ready: (_caps, _snapshot, act) => { action = act({ kind: "seat", id: "s", action: "act" }); }, item: () => {} });
+    await expect(action).rejects.toThrow(/source sent too much data/i); expect(cancelled).toBeGreaterThan(0);
+  });
+}

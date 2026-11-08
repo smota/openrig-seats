@@ -18,16 +18,16 @@ export interface SSEMessage {
 export interface ParseSSEOptions {
   /** Called as soon as a valid `retry:` field is read, including in blocks that carry no data. */
   onRetry?: (ms: number) => void;
-  /** Maximum UTF-8 bytes per line, excluding its terminator. Default 1 MiB. */
+  /** Maximum UTF-8 bytes per line, excluding its terminator. Unlimited when omitted. */
   maxLineBytes?: number;
-  /** Maximum UTF-8 bytes in joined event data. Default 4 MiB. */
+  /** Maximum UTF-8 bytes in joined event data. Unlimited when omitted. */
   maxEventBytes?: number;
 }
 
 export async function* parseSSE(body: ReadableStream<Uint8Array>, options: ParseSSEOptions = {}): AsyncGenerator<SSEMessage> {
-  const maxLineBytes = options.maxLineBytes ?? 1024 * 1024;
-  const maxEventBytes = options.maxEventBytes ?? 4 * 1024 * 1024;
-  if (![maxLineBytes, maxEventBytes].every((n) => Number.isSafeInteger(n) && n > 0)) throw new RangeError("SSE limits must be positive integers");
+  const maxLineBytes = options.maxLineBytes;
+  const maxEventBytes = options.maxEventBytes;
+  if (![maxLineBytes, maxEventBytes].every((n) => n === undefined || (Number.isSafeInteger(n) && n > 0))) throw new RangeError("SSE limits must be positive integers");
   const encoder = new TextEncoder();
   let lineBytes = 0;
   let eventBytes = 0;
@@ -63,7 +63,7 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>, options: Parse
     if (field === "event") event = value;
     else if (field === "data") {
       eventBytes += encoder.encode(value).byteLength + (data.length ? 1 : 0);
-      if (eventBytes > maxEventBytes) throw new SSELimitError("SSE event byte limit exceeded");
+      if (maxEventBytes !== undefined && eventBytes > maxEventBytes) throw new SSELimitError("SSE event byte limit exceeded");
       data.push(value);
     }
     else if (field === "id") {
@@ -80,7 +80,7 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>, options: Parse
       const { done, value } = await reader.read();
       if (done) break;
       // Count raw bytes before decoding or retaining any unterminated text.
-      for (const byte of value) {
+      if (maxLineBytes !== undefined) for (const byte of value) {
         if (byte === 10 || byte === 13) lineBytes = 0;
         else if (++lineBytes > maxLineBytes) throw new SSELimitError("SSE line byte limit exceeded");
       }

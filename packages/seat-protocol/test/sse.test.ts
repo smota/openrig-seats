@@ -81,3 +81,8 @@ it("resets event limits and preserves normal multi-byte data", async () => {
   for await (const message of parseSSE(bodyOf(["data: é\n\ndata: ab\n\n"]), { maxLineBytes: 8, maxEventBytes: 2 })) messages.push(message.data);
   expect(messages).toEqual(["é", "ab"]);
 });
+
+it("keeps both line and event sizes unlimited when limits are omitted", async () => {
+  const payload = "x".repeat(5 * 1024 * 1024);
+  expect((await all([`data: ${payload}\n\n`]))[0]!.data).toBe(payload);
+});

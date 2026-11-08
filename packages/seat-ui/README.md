@@ -88,7 +88,9 @@ build time and cannot cover arbitrary schemas received later from a gateway.
 Replacing Ajv would change the supported validation contract, so `unsafe-eval`
 remains required. It permits no inline scripts. `connect-src` allows only self
 and the configured gateway origin. Validators use a 200-entry LRU; eviction
-removes the schema from Ajv, and disposing a view replaces its Ajv instance.
+removes the schema from Ajv. Every 100 evictions replaces the Ajv instance and
+rebuilds the retained cache to release nested schema ID references; disposing a
+view also replaces its Ajv instance.
 Schemas deeper than 32 object/array levels or patterns over 500 characters are
 refused before compilation or native control creation. A host with
 a stricter policy must permit that compilation or action input forms are
@@ -112,6 +114,27 @@ slow consumers, and closes the upstream when the browser cancels. Gateway-side
 scroll limits still apply. Terminals and their contents are never stored.
 Question parts show their protocol options as text; only explicitly declared
 actions produce submissions.
+
+## Threat model
+
+seat-ui protects integrity and confidentiality against any source, including a
+hostile source: source content must not execute scripts (XSS), leak bearer
+tokens, or send input to terminals. Terminal subscriptions are read-only; the
+only outgoing terminal frame requests a scroll offset.
+
+For availability, seat-ui trusts the operator-configured source. Denial of
+service caused by a hostile source is out of scope, including catastrophic
+regular expressions in schemas, endless streams, unbounded entity counts and
+aggregate memory growth. Schema validation runs in the browser; it is not
+isolated in a worker and does not promise protection against regex freezes.
+
+Existing size caps remain defense in depth: JSON capabilities and snapshots
+are capped at 4 MiB, action response and error bodies at 1 MiB, and stream lines
+at 1 MiB and events at 4 MiB. Terminal frame and viewer caps, bounded buffering,
+schema depth and pattern-length guards, and validator cache limits reduce
+accidental resource use; they do not establish an availability guarantee for
+a hostile source. Terminal SSE limits allow for JSON escaping of the advertised
+raw frame size.
 
 ## Verify
 
