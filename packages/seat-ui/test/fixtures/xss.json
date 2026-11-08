@@ -1,0 +1,9 @@
+{
+  "id": "xss-card",
+  "updatedAt": "2026-11-07T12:00:00Z",
+  "title": "<img src=x onerror=\"window.pwned=1\"><script>alert(1)</script>",
+  "summary": "<iframe src=javascript:alert(1)></iframe>",
+  "actions": [
+    { "id": "inspect", "label": "<svg onload=alert(1)>", "input": { "type": "string", "title": "<b>Untrusted label</b>", "default": "<img src=x onerror=alert(1)>" } }
+  ]
+}
