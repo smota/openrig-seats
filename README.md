@@ -1,195 +1,101 @@
 # openrig-seats
 
-A small, stable protocol for looking at and talking to the agent "seats" of an
-[OpenRig](https://github.com/mvschwarz/openrig) deployment from outside the terminal (web UIs, chat
-channels, voice), plus the tests that keep it honest against OpenRig itself.
+A seat gateway and reference web UI for [OpenRig](https://github.com/mvschwarz/openrig).
+View seats, activity and work through one small protocol. Build other clients on the same API.
+Read-only by default. Pre-1.0; packages are private and not published to npm.
 
-**Status: pre-1.0.** Nothing here is published to npm yet; the protocol may still change before 1.0.
+## Quick start
 
-## Relation to OpenRig
+Use Node 22 or 24 and npm 10+. From a clean clone:
 
-This repository follows the ideas in OpenRig discussion
-[#2691](https://github.com/mvschwarz/openrig/discussions/2691). It is an independent project: it uses
-only OpenRig's existing HTTP routes and makes no change to OpenRig. The OpenRig maintainers have not
-reviewed or endorsed it. Packages follow OpenRig's tooling and use `seat-*` names so that any of them
-can move into OpenRig later with a scope rename (OpenRig packages use the `@openrig/*` scope; these use
-`@openrig-seats/*`).
+```sh
+git clone --branch feat/w17-adoption https://github.com/smota/openrig-seats.git
+cd openrig-seats
+npm ci
+npm run build
+node examples/minimal/main.mjs
+```
 
-## Packages
+Open **http://127.0.0.1:5173**. Leave Gateway URL at `/gateway`, enter
+`fictional-demo-bearer`, then choose **Connect**. This public fixture value is not a secret.
+The example runs one real gateway and seat-ui against fictional local fixtures.
+It needs no accounts, external services or OpenRig daemon. Stop it with Ctrl+C.
+Allow about five minutes, including dependency installation on a normal connection.
 
-| Package | Content |
+See the [minimal example](examples/minimal/README.md) for ports, its automated test and the optional daemon path.
+
+![Reference seat-ui overview](docs/images/seat-ui-overview.png)
+
+## Implementation guide
+
+Connect the gateway to your existing OpenRig daemon, then point the seat-ui server at the gateway:
+
+```text
+OpenRig daemon -> seat gateway -> seat-ui server -> browser
+```
+
+Follow the [implementation guide](docs/implementation.md) for configuration and commands.
+It uses existing HTTP routes; it does not patch OpenRig.
+For a custom client, use the [protocol schemas and client](packages/seat-protocol/README.md).
+Read the [package map](docs/architecture.md), [gateway behavior](docs/gateway.md) and
+[native reader guide](docs/native-readers.md) when extending those parts.
+
+This independent project follows OpenRig discussion
+[#2691](https://github.com/mvschwarz/openrig/discussions/2691).
+OpenRig's maintainers have not reviewed or endorsed it.
+[More screenshots](docs/architecture.md#screenshots) include a downstream cockpit using the gateway.
+
+## Configuration reference
+
+The gateway reads JSON with `--config <path>`. `tokenFile` is required.
+It binds loopback by default. Sending, terminal access and daemon free text are opt-in.
+The UI uses `SEAT_GATEWAY_URL` and `PORT`.
+
+See [all settings and defaults](docs/configuration.md), the
+[copyable gateway config](packages/seat-gateway/examples/seat-gateway.config.json) and the
+[optional user service example](packages/seat-gateway/examples/seat-gateway.service).
+
+## Compatibility
+
+Only the exact OpenRig commit below has a checked-in conformance baseline.
+Other revisions need verification; no release range is claimed.
+
+| This repo version | OpenRig release or commit range | Protocol / schema version |
+|---|---|---|
+| Root `0.0.0`; packages `0.1.0` (private development versions) | `f5b62726ff759a857eeb76e2cbd654493fedba2f` only | Seat protocol `1.0`; schemas `v1` (JSON Schema 2020-12); `x-openrig` `1.0` |
+
+[openrig-compat.json](openrig-compat.json) is the machine-readable declaration.
+`npm test` checks declared protocol/schema versions against code and schemas.
+See [conformance checks and pin updates](packages/seat-conformance/README.md) and
+[CHANGELOG.md](CHANGELOG.md). Git history currently has no release tags.
+
+## Troubleshooting
+
+| Symptom | Check |
 |---|---|
-| `packages/seat-protocol` | JSON Schemas (2020-12) for `host`, `rig`, `seat`, `turn`, `attention`, `work`, the stream envelope, declared actions, `POST /act` and `GET /capabilities`; valid and invalid fixtures; generated TypeScript types; a dependency-free client (fetch plus SSE parsing, cursor resume). |
-| `packages/seat-conformance` | A checked-in snapshot of the OpenRig routes, `transport/send` outcome and failure map, and `RigEvent` names the gateway depends on, re-extracted from an OpenRig checkout; the test fails on any removal or rename. |
-| `packages/seat-readers` | Readers that turn a seat's generation record into `turn`s: `claude-jsonl`, `codex-rollout`, `agy-jsonl`, `pi-jsonl` and a plain-text fallback behind one `detect`/`follow` interface; cursor = UTF-8 byte length of complete lines; `generationId[0]` identifies the occupant. |
-| `packages/seat-source-openrig` | The only code that knows daemon routes (GET only). Fills the `x-openrig` extension (seat detail and the `x-openrig.event` kind, see `seat-protocol`). Snapshots (`/api/ps`, `/api/rigs/:id/nodes`, `/api/attention`, `/api/queue/list`) plus the `/api/events` stream become `host`, `rig`, `seat`, `attention` and `work` upserts and deletes; resumes from the daemon's event sequence, and does a full resync on a gap or a restarted log. |
-| `packages/seat-ui` | Static TypeScript/DOM reference UI driven by capabilities, snapshot, cursor stream and declared action schemas; standalone browser transport adapter. |
-| `packages/seat-gateway` | Read-only Hono server: `GET /capabilities`, `GET /stream`, `GET /snapshot`. See below. |
+| Install or build fails | Use Node 22 or 24 and npm 10+; run `npm ci`, then `npm run build`. |
+| UI returns 502 | Start the gateway and check the UI's fixed `SEAT_GATEWAY_URL`. For fixtures, use the minimal example command. |
+| UI refuses connection | Use `/gateway` with the standalone UI server. Vite has no gateway adapter. |
+| Gateway returns 401 or refuses startup | Use the correct bearer. Live token files must be readable and mode `0600`. |
+| Host or Origin refused | Use loopback URLs. Review `allowedHosts` and `allowedOrigins`; keep checks enabled. |
+| Terminal or send is absent | Both default off. Read the [gateway guide](docs/gateway.md) before enabling them. |
+| Checkout conformance check fails | Set `OPENRIG_CHECKOUT` to a source checkout of the pinned revision; see [conformance](packages/seat-conformance/README.md). |
 
-`packages/seat-ui` is a static, protocol-driven reference web UI: hosts, rigs,
-seats, turns, attention, work, generic declared-action forms and an optional
-read-only terminal. It includes a standalone server for authenticated browser
-access to any gateway. See [seat-ui](packages/seat-ui/README.md) for fixture and
-live-gateway instructions.
+## Contributing
 
-## Seat gateway (read-only by default)
+Reuse the current packages, tests and patterns. Keep one concern per change.
+Use fictional fixtures and report exactly what was tested.
 
-`packages/seat-gateway` serves the protocol from an OpenRig daemon so that clients stop polling it.
-It runs server-side because OpenRig refuses a foreign browser `Origin`; the gateway does the same.
-
-| Route | Content |
-|---|---|
-| `GET /capabilities` | Protocol version, served kinds (including `x-openrig.event`), extensions (`x-openrig`) with `extensionVersions`, harnesses seen, features. Each daemon route is probed (a 404 turns that feature and its kind off) and the answer is reused for 30 s. `features.act` is `false` and there is no `actions` list unless the operator enables `act.send` (see below). |
-| `GET /terminal/:seatId` | Optional read-only terminal WebSocket; raw ANSI output, scroll-only JSON input. Same bearer, Origin and Host checks. Off by default. |
-| `GET /stream` | SSE of the stream envelope `{cursor, kind, id, op, data}`; the SSE `id` is the cursor. Resume with `Last-Event-ID` (or `?cursor=`). |
-| `GET /snapshot/:kind`, `GET /snapshot?kind=` | Current items of one kind plus the cursor they are consistent with; without a kind, all served kinds. |
-
-**Cursors.** The cache keeps the latest operation per item, each stamped with a sequence number; a client
-resuming after N receives exactly the entries newer than N, in order. Nothing is skipped (the latest state
-of every change is there) and nothing repeats (sequence numbers are never reused). A client that falls
-behind is not buffered for: it reads the newest state when it catches up, so intermediate states may be
-conflated and memory stays bounded by live items plus a tombstone limit. A cursor from before a gateway
-restart (cursors carry a per-start epoch), from the future, or older than the pruned tombstones is
-answered with a `reset` control message (SSE `event: control`, schema `stream-control`, no id) and then the
-full state. The same happens to an open stream that missed a pruned delete. `seat-protocol`'s client
-surfaces it (`onReset`, a yielded item) and `Mirror.apply` clears on it. A client that accepts no bytes for 30 s is dropped.
-
-**State.** The gateway's state is a cache rebuilt from the daemon on every start. It follows the daemon's
-`seq`: after a reconnect it resumes with `Last-Event-ID` but always re-reads every snapshot first; a changed
-daemon process identity (`/healthz` pid), a gap or a backwards sequence also forgets the sequence. A
-failed refresh is retried on a bounded backoff. Redirects from the daemon are never followed. The queue
-route cannot be paged: a full page marks `work` incomplete (the host reports it) and suspends deletes. While the daemon is
-down the host is `offline` and cached items stay readable. The gateway only issues GET requests to the
-daemon, always with a bounded `replay` (default 2000, `replay=0` plus `Last-Event-ID` when resuming; the daemon's log is unbounded), never writes tmux and
-never opens the daemon's database. Request bodies of queue items are not copied into the protocol.
-
-**`send` action (off by default).** With `act.send: true` the gateway declares `{id: "send", input: {text, maxLength}, danger: false}` on every `seat`, lists it in `/capabilities` (`features.act: true`, `actions`) and serves `POST /act` (same bearer as every route). It calls the daemon's `POST /api/transport/send` and nothing else; the config needs `act.sender` (a registered non-seat address such as `cockpit@<rig>`, sent as `x-openrig-session`, which the daemon treats as an unverified claim; a seat name is refused) and `act.idempotencyFile`. Never sent: `x-openrig-occupant-generation`, `force` or any override. The daemon token (`daemonTokenFile`, 0600) goes only to the literal loopback IP, with no redirects.
-- At most one send per `idempotencyKey`: the gateway's own table (a 0600 file, written before the daemon is called, holding a hash of the request and never the text) returns the stored response with `replayed: true`. A new key for the same text is a new send; the same key for a different request is refused. OpenRig's `deliveryId` is not relied on (it does not de-duplicate in draft-aware mode). A send in flight when the gateway stopped comes back as `failed`. Keys are kept for `act.retentionDays` (default 7) whatever the count; a table full of unexpired keys (`act.maxKeys`) answers 503 instead of evicting. The entry is fsynced (file, rename, directory) before the daemon is called, and if that fails nothing is sent. One gateway per table file: `<file>.lock` makes a second process refuse to start.
-- Refused before anything is sent: unknown seat, a seat that is `needs-input`, `blocked`, `stopped`, `unknown` or held, text over `act.maxLength` (default 4000).
-- Outcomes: `delivered` and `rendered-unconfirmed` are `completed`; `retained` is `accepted` (the daemon holds it; do not resend); a refusal with `inputPhase: not_reached` is `rejected` with the daemon's reason code; anything else (`attempted`, `written`, no answer, an unexpected status) is `failed`. The gateway never retries on its own; a person decides and uses a new key. Daemon free text is not copied into the response.
-- Sends to one seat are serialized.
-
-**Terminal view (off by default).** Set `terminal.enabled: true` and
-`terminal.principal: "viewer@<rig>"` to enable `GET /terminal/:seatId` (an encoded protocol seat
-ID). The principal is fixed gateway configuration and must be a non-seat address; client
-principal and occupant-generation headers are never forwarded. The gateway checks the daemon's
-`GET /api/config/ui.enabled` on every capability request and terminal attach, failing closed.
-The daemon must have its web UI WebSocket enabled (changing `ui.enabled` requires a daemon
-restart). With either flag off, `features.terminal` is false and no terminal descriptor is served.
-The daemon connection uses `GET /api/terminal/:sessionName`, bearer authentication, no redirects
-and the fixed `x-openrig-session` principal. No terminal content is logged or stored.
-Scroll frames are conflated per viewer: only the latest offset is kept (offsets above 10,000 lines are clamped to
-10,000). At most one scroll is in flight to the daemon per viewer; it is released by the first daemon output frame
-that arrives at least 150 ms after the scroll was sent, or after 2 s, and forwarded scrolls are at least 100 ms
-apart. So one viewer causes at most about 6 daemon captures per second whatever the pane prints, and the gateway
-forwards at most 20 scrolls per second across all viewers. Terminal authorization is refused (403) until one full
-resync has read every rig's seats; after that it stays allowed on the last-known seats even if a later resync fails
-(a seat created in that window is not yet known, which the daemon's own checks still cover). A daemon output frame over
-`terminal.maxFrameBytes` still closes that viewer's connection (the protocol has no in-band notice for raw ANSI output).
-`features.terminal` reflects the stored `ui.enabled` value, which only takes effect after a daemon restart; a
-connection attempt fails safe if the daemon does not actually serve the WebSocket.
-
-Clients receive raw ANSI text frames; only JSON `{type:"scroll",offset:N}` is accepted upstream
-(integer 0–100000; the gateway clamps above 10,000; zero returns to live). Keys, text, paste, resize and binary input are dropped.
-Unknown fields are stripped from scroll frames. The daemon owns terminal geometry; the gateway
-never requests a resize or input. Terminal output can contain sensitive session content, so enable
-it only for trusted gateway clients. Handshakes require an Authorization header; URL tokens are
-not accepted. Native browser WebSocket cannot set that header.
-
-Limits: `terminal.maxViewers` defaults to 8 (1–1024), including pending handshakes;
-`terminal.maxFrameBytes` defaults to 262144 (128–1048576), applied to both WebSocket peers with
-compression and automatic pong replies disabled (ping replies use the same bounded send budget). Each peer's queued output is capped at one frame budget; slow viewers,
-binary daemon output and oversized frames are disconnected. Only the newest scroll is retained
-while the daemon handshake is pending, which times out after 10 seconds. Disconnect or shutdown
-releases the viewer and upstream connection. Tests use fake daemons and in-memory sockets only.
-
-**`x-openrig` text and replay.** With `xOpenrig.includeText` off no daemon free text reaches any field, core or extension: work titles read `Queue item <id>`, attention titles `Request for a person: <id>` (or `Update ...`) with no impact. `xOpenrig.includeText: true` adds the daemon's free text (error text, prompt reason or
-summary, hold reason, event summaries, work title, attention title and impact). It is **sensitive**: the daemon may put message content or
-credentials in it. Enable it only on loopback-only deployments you trust; it is advertised as
-`features["x-openrig.text"]` in `/capabilities`. `xOpenrig.replay` is the number of newest daemon events asked for on a
-cold start (`/api/events?replay=N`, never omitted); the budget counts ALL daemon event types, so fewer mapped events may
-remain, and the gateway keeps the newest 200 mapped ones. A reconnect within the same daemon process resumes with
-`Last-Event-ID`; a restarted daemon drops the cursor and the kept events and replays the budget again.
-
-**Security.**
-- Binds `127.0.0.1` by default; any other address is refused unless `allowNonLoopback` is set.
-- Every route needs `Authorization: Bearer <token>`; the token is read from a file that must be mode 0600
-  (`tokenFile`) and is compared in constant time. Tokens are never put in argv, URLs or logs.
-- A request with an `Origin` header is refused unless the origin is in `allowedOrigins` (empty by default);
-  a `Host` that is not loopback or in `allowedHosts` is refused (DNS rebinding).
-- The daemon URL must be a literal loopback IP. The optional daemon token (`daemonTokenFile`, 0600) is sent
-  only there, as a header, and is only needed if you point the gateway at routes that require it.
-
-**Run.**
-
-```
-npm install && npm run build
-umask 077; openssl rand -hex 32 > ~/.config/seat-gateway/token
-node packages/seat-gateway/dist/main.js --config ~/.config/seat-gateway/config.json
+```sh
+npm ci
+npm run build
+npm test
+npm test -w @openrig-seats/seat-gateway -- minimal-example
+npm run check
 ```
 
-Config keys (JSON): `daemonUrl` (default `http://127.0.0.1:7433`), `daemonTokenFile`, `tokenFile`
-(required), `listen` (`host`, `port`; default `127.0.0.1:8088`), `allowNonLoopback`, `allowedOrigins`,
-`allowedHosts`, `hostId`, `hostName`, `tombstoneLimit` (default 5000), `xOpenrig` (`includeText`, default `false`; `replay`, default 2000), `terminal` (`enabled`, default `false`; `principal`; `maxViewers`, default 8; `maxFrameBytes`, default 262144). A leading `~/` in the token paths is
-expanded. `packages/seat-gateway/examples/` has a `systemd --user` unit and a config to copy.
+Default tests use fixtures. Upstream source checks and live daemon tests are explicit opt-ins;
+see [development and contribution details](docs/contributing.md).
+Agents should read [AGENTS.md](AGENTS.md).
 
-**Tests.** `npm test` runs against a mock daemon built from recorded-shape fixtures
-(`packages/seat-source-openrig/test`): mapping validated against the schemas, reconnect, daemon restart
-and sequence gap, gateway restart, slow and stalled clients, auth, Origin and Host checks, and a soak.
-`SEAT_GATEWAY_SOAK_MS=3600000 npm test -w @openrig-seats/seat-gateway -- soak` runs the soak for an hour
-(default 3 s). `OPENRIG_SEATS_LIVE=1 OPENRIG_SEATS_LIVE_URL=http://127.0.0.1:<port>` adds GET-only live tests
-against a daemon (`OPENRIG_SEATS_LIVE_TOKEN_FILE` optionally names the daemon token file).
-
-## Native session readers
-
-`createAgyReader` reads Antigravity CLI (`agy`, `antigravity`) JSONL from
-`<home>/.gemini/antigravity-cli/brain/<session>/.system_generated/logs/transcript.jsonl`.
-This format was verified read-only against live files on this machine. `USER_INPUT`
-records provide user prose; `PLANNER_RESPONSE` provides assistant prose, thinking
-status and tool names. `GENERIC` records provide status only: their opaque content
-may be tool output. Calls have no native call IDs, so tool parts describe the
-requested action as pending without claiming execution or pairing results. A planner
-record marked `DONE` does not establish that its tools completed. Errors provide status only.
-This is Antigravity's format, **not** Gemini CLI's separate JSON session format;
-`gemini` is not auto-selected.
-
-`createPiReader` reads Pi v3 session JSONL from
-`<home>/.pi/agent/sessions/<encoded-project>/<session>.jsonl`, also verified against
-live files. `message` entries map user/assistant prose, thinking status, `toolCall`
-and `toolResult` blocks (paired by `toolCallId`), stop/error states. Metadata,
-custom entries, system prompts and branch/compaction summaries are ignored.
-These are append-order records; this reader does not reconstruct the active branch
-of Pi's session tree. All checked-in fixtures are minimal synthetic data.
-
-Both readers use the existing complete-line UTF-8 byte cursor and generation reset
-rules, and are registered by `createReaders`. Their `includeText` option defaults
-to `false`; `true` adds only user/assistant prose. Tool arguments, tool output,
-thought content, signatures and error text are never emitted. Existing Claude,
-Codex and plain-text readers retain their existing text behavior.
-
-`discoverAgySessions({home})` and `discoverPiSessions({home})` return sorted native
-session paths using directory entries only. Alternatively pass `{root}` to name
-the Antigravity `brain` or Pi `sessions` directory directly (takes precedence over
-`home`). A home or root must be injected; there is no implicit user home. Missing
-roots return an empty list; symlink entries are excluded. Discovery does not open
-transcripts. Callers read the discovered file and pass its suffix through the
-existing `GenerationRecord` interface; the reader itself performs no file I/O.
-
-## Develop
-
-Node `^22 || ^24`, npm 10+.
-
-```
-npm install
-OPENRIG_CHECKOUT=<path to OpenRig at the pinned commit> npm test   # no network, no daemon
-npm run check    # typechecks sources and tests
-npm run generate # regenerates seat-protocol types from the schemas
-```
-
-`openrig-compat.json` lists the OpenRig commits this repository was tested against; see
-`packages/seat-conformance/README.md` for how to bump the pin. Default tests never touch a running
-daemon; an opt-in live test (GET only) is described there.
-
-## License
-
-Apache-2.0, see `LICENSE`.
+Apache-2.0; see [LICENSE](LICENSE).

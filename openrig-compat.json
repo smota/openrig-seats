@@ -1,6 +1,10 @@
 {
   "$comment": "OpenRig revisions this repository's conformance snapshot was extracted from and tested against.",
   "openrig": "https://github.com/mvschwarz/openrig",
+  "repositoryVersion": "0.0.0",
+  "protocolVersion": "1.0",
+  "schemaVersion": "v1",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "tested": [
     {
       "role": "pinned",

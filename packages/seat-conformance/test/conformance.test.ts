@@ -72,8 +72,8 @@ describe("snapshot file", () => {
   });
 });
 
-describe("OpenRig checkout", () => {
-  it("OPENRIG_CHECKOUT is set to a checkout", () => {
+describe.skipIf(checkout === undefined)("OpenRig checkout", () => {
+  it("an explicit OPENRIG_CHECKOUT points to a checkout", () => {
     expect(resolveOpenRigPath()).toBeTruthy();
     expect(available, "OPENRIG_CHECKOUT does not contain packages/daemon/src/server.ts").toBe(true);
   });
