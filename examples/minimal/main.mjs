@@ -58,13 +58,21 @@ export async function startExample({ gatewayPort = 8088, uiPort = 5173 } = {}) {
     return { gatewayUrl, uiUrl: `http://127.0.0.1:${ui.address().port}`, stop };
   } catch (error) {
     await stop();
+    if (error.code === "EADDRINUSE") {
+      throw new Error(`port ${error.port} is in use; set ${ui ? "PORT" : "GATEWAY_PORT"} to an unused port.`);
+    }
     throw error;
   }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const example = await startExample({ gatewayPort: process.env.GATEWAY_PORT ?? 8088, uiPort: process.env.PORT ?? 5173 });
-  console.error(`Fixture gateway: ${example.gatewayUrl}. Open ${example.uiUrl} and connect to /gateway.`);
-  console.error("Use the public fictional demo bearer documented in examples/minimal/README.md. Ctrl-C stops both servers.");
-  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { void example.stop(); });
+  try {
+    const example = await startExample({ gatewayPort: process.env.GATEWAY_PORT ?? 8088, uiPort: process.env.PORT ?? 5173 });
+    console.error(`Fixture gateway: ${example.gatewayUrl}. Open ${example.uiUrl} and connect to /gateway.`);
+    console.error("Use the public fictional demo bearer documented in examples/minimal/README.md. Ctrl-C stops both servers.");
+    for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { void example.stop(); });
+  } catch (error) {
+    console.error(`minimal example: ${error.message}`);
+    process.exitCode = 1;
+  }
 }

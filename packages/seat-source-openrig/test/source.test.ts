@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { createServer } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DaemonClient, OpenRigSource, type Change } from "../src/index.js";
 import { waitFor } from "./helpers.js";
 import { MockDaemon } from "./mock-daemon.js";
@@ -316,20 +316,33 @@ describe("daemon client safety", () => {
 
 describe("integrity fixes", () => {
   it("retries a failed refresh with bounded backoff and no new event or periodic resync", async () => {
-    make().start();
-    await waitFor(() => daemon.streamCount === 1 && last("attention", "queue:q-100"));
-    daemon.broken.add("/api/attention");
-    daemon.attention = { ...daemon.attention, items: (daemon.attention.items as unknown[]).slice(1) };
-    daemon.emit({ type: "queue.updated", qitemId: "q-100" });
-    await waitFor(() => daemon.requests.filter((r) => r.path === "/api/attention").length >= 3, 4000, "retries");
-    await new Promise((r) => setTimeout(r, 300));
-    const attempts = daemon.requests.filter((r) => r.path === "/api/attention").length;
-    expect(attempts).toBeLessThan(14); // backoff, not a hot loop
-    daemon.broken.delete("/api/attention");
-    await waitFor(() => last("attention", "queue:q-100")?.op === "delete", 4000, "retry succeeded");
-    const settled = daemon.requests.length;
-    await new Promise((r) => setTimeout(r, 400));
-    expect(daemon.requests.length).toBe(settled); // retries stop after success
+    let schedulingRetry = false;
+    make({ log: (message) => { if (message.startsWith("refresh failed")) schedulingRetry = true; } }).start();
+    await waitFor(() => daemon.streamCount === 1 && source.status().seatsSynced);
+    const retryDelays: number[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) => {
+      // The failed-refresh log immediately precedes scheduling, with no intervening await.
+      if (schedulingRetry) { retryDelays.push(ms!); schedulingRetry = false; }
+      return realSetTimeout(callback, ms, ...args);
+    });
+    try {
+      daemon.broken.add("/api/attention");
+      daemon.attention = { ...daemon.attention, items: (daemon.attention.items as unknown[]).slice(1) };
+      daemon.emit({ type: "queue.updated", qitemId: "q-100" });
+      await waitFor(() => retryDelays.length >= 5, 4000, "capped retries");
+      // Assert the backoff itself, independent of how many attempts wall time allowed.
+      expect(retryDelays).toEqual(retryDelays.map((_, i) => Math.min(fast.retryMaxMs, fast.retryMinMs * 2 ** i)));
+      daemon.broken.delete("/api/attention");
+      await waitFor(() => last("attention", "queue:q-100")?.op === "delete", 4000, "retry succeeded");
+      const settled = daemon.requests.filter((r) => r.path === "/api/attention").length;
+      const scheduled = [...retryDelays];
+      await new Promise((r) => setTimeout(r, 400));
+      expect(daemon.requests.filter((r) => r.path === "/api/attention")).toHaveLength(settled);
+      expect(retryDelays).toEqual(scheduled); // retries stop after success
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   it("detects a restarted daemon with no new events: a new identity forgets the sequence and everything is read again", async () => {

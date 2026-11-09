@@ -11,7 +11,6 @@ the running example needs only loopback connections.
 ```sh
 git clone https://github.com/smota/openrig-seats.git
 cd openrig-seats
-git switch feat/w17-adoption
 npm ci
 npm run build
 node examples/minimal/main.mjs
@@ -32,8 +31,9 @@ seat-ui standalone server. It does not call daemon routes. Actions and terminal
 access are disabled. The snapshot and SSE stream contain the same fixture data;
 the fixtures stay static until the process stops.
 
-Press Ctrl-C to stop both servers. Port conflicts fail visibly. Choose unused
-ports if needed:
+Press Ctrl-C to stop both servers. `GATEWAY_PORT` sets the gateway port (default
+8088); `PORT` sets the UI port (default 5173). If a port is in use, the example
+exits with a one-line hint naming the variable to change. Choose unused ports:
 
 ```sh
 GATEWAY_PORT=18088 PORT=15173 node examples/minimal/main.mjs
@@ -50,9 +50,9 @@ From the repository root:
 npm test -w @openrig-seats/seat-gateway -- minimal-example
 ```
 
-The existing Vitest runner tests the same fixture wiring through seat-ui's
+The existing Vitest runner tests startup, port conflicts and the same fixture wiring through seat-ui's
 adapter: authentication, capability flags, snapshot relationships, SSE and cursor
-resume. The test runs in memory and never contacts a daemon. Root `npm test`
+resume. Startup tests use ephemeral loopback ports; no test contacts a daemon. Root `npm test`
 includes it.
 
 ## Use an existing local OpenRig daemon instead

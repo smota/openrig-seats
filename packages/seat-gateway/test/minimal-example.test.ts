@@ -1,9 +1,43 @@
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
-import { createFixtureExample, DEMO_BEARER } from "../../../examples/minimal/main.mjs";
+import { createServer } from "node:http";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { once } from "node:events";
+import { createFixtureExample, DEMO_BEARER, startExample } from "../../../examples/minimal/main.mjs";
 import { readFrames } from "./helpers.js";
 
 describe("minimal fixture example", () => {
+  it("starts both servers on configured ports and routes the UI to the gateway", async () => {
+    const example = await startExample({ gatewayPort: 0, uiPort: 0 });
+    try {
+      expect(example.gatewayUrl).not.toMatch(/:0$/);
+      expect(example.uiUrl).not.toMatch(/:0$/);
+      const response = await fetch(`${example.uiUrl}/gateway/snapshot`, { headers: { authorization: `Bearer ${DEMO_BEARER}` } });
+      expect(response.status).toBe(200);
+      expect((await response.json()).kinds.seat).toHaveLength(1);
+    } finally {
+      await example.stop();
+    }
+  });
+
+  it.each(["GATEWAY_PORT", "PORT"])("fails with a one-line %s hint when that port is occupied", async (variable) => {
+    const blocker = createServer();
+    blocker.listen(0, "127.0.0.1");
+    await once(blocker, "listening");
+    const port = (blocker.address() as { port: number }).port;
+    try {
+      await expect(promisify(execFile)(process.execPath, [fileURLToPath(new URL("../../../examples/minimal/main.mjs", import.meta.url))], {
+        env: { ...process.env, GATEWAY_PORT: "0", PORT: "0", [variable]: String(port) }, timeout: 4000,
+      })).rejects.toMatchObject({
+        code: 1,
+        stderr: `minimal example: port ${port} is in use; set ${variable} to an unused port.\n`,
+      });
+    } finally {
+      await new Promise<void>((done) => blocker.close(() => done()));
+    }
+  });
+
   it("serves the real gateway through seat-ui with auth, snapshot and cursor streaming", async () => {
     const { handle, store } = createFixtureExample({ rootDir: fileURLToPath(new URL("../../seat-ui", import.meta.url)) });
     const request = (path: string, headers: Record<string, string> = {}) =>

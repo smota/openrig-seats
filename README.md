@@ -9,7 +9,7 @@ Read-only by default. Pre-1.0; packages are private and not published to npm.
 Use Node 22 or 24 and npm 10+. From a clean clone:
 
 ```sh
-git clone --branch feat/w17-adoption https://github.com/smota/openrig-seats.git
+git clone https://github.com/smota/openrig-seats.git
 cd openrig-seats
 npm ci
 npm run build
@@ -21,6 +21,11 @@ Open **http://127.0.0.1:5173**. Leave Gateway URL at `/gateway`, enter
 The example runs one real gateway and seat-ui against fictional local fixtures.
 It needs no accounts, external services or OpenRig daemon. Stop it with Ctrl+C.
 Allow about five minutes, including dependency installation on a normal connection.
+
+The gateway uses port 8088 and the UI uses 5173. If either port is in use, the
+example exits with a hint. Choose unused ports with
+`GATEWAY_PORT=18088 PORT=15173 node examples/minimal/main.mjs`, then open
+<http://127.0.0.1:15173>.
 
 See the [minimal example](examples/minimal/README.md) for ports, its automated test and the optional daemon path.
 
