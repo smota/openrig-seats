@@ -119,10 +119,28 @@ function control(schema: Record<string, unknown>, name: string, required: boolea
   return { node: input, read: () => input.type === "checkbox" ? input.checked : input.type === "number" ? (input.value === "" ? undefined : Number(input.value)) : input.value };
 }
 
+/** Pending submissions remain recoverable even when snapshots stop declaring their action/item. */
+export function savedSubmissions(): ActInput[] {
+  const pending: ActInput[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)!;
+      try {
+        const tuple: unknown = JSON.parse(key);
+        if (!Array.isArray(tuple) || tuple.length !== 4 || tuple[0] !== "seat-recoverable-action-v1") continue;
+        const r = JSON.parse(localStorage.getItem(key) ?? "null") as ActInput | null;
+        if (r && typeof r.kind === "string" && r.kind === tuple[1] && typeof r.id === "string" && r.id === tuple[2] && typeof r.action === "string" && r.action === tuple[3] && typeof r.idempotencyKey === "string" && r.idempotencyKey.length >= 8 && r.idempotencyKey.length <= 128) pending.push(r);
+      } catch { /* Ignore foreign or corrupt storage; never invent a replacement request. */ }
+    }
+  } catch { /* Unavailable storage is surfaced when an action is submitted. */ }
+  return pending;
+}
+
 export function createActionForm(
   kind: string, id: string, action: Pick<Action, "id" | "label" | "input" | "danger">,
   submit: (input: ActInput) => Promise<unknown>, confirm: (message: string) => boolean = (message) => window.confirm(message),
   validators: ActionFormValidators = defaultValidators,
+  recoveryOnly = false,
 ): HTMLFormElement {
   const form = element("form", undefined, "action-form");
   form.setAttribute("aria-label", action.label); form.noValidate = true;
@@ -172,9 +190,10 @@ export function createActionForm(
   } catch { /* A new submission still has to persist successfully below. */ }
   const showRetry = () => { button.textContent = "Retry same submission"; result.textContent = `Retry the same submission before starting another action. Original input: ${JSON.stringify(retry?.input)}`; };
   if (retry) showRetry();
+  if (recoveryOnly) button.disabled = !retry;
   let pending = false;
   form.addEventListener("submit", async (event) => {
-    event.preventDefault(); if (pending || button.disabled) return;
+    event.preventDefault(); if (pending || button.disabled || (recoveryOnly && !retry)) return;
     let value: unknown;
     try {
       if (!retry && action.input !== undefined) value = jsonMode ? JSON.parse(json.value) : nativeControl!.read();
@@ -200,7 +219,7 @@ export function createActionForm(
     catch {
       showRetry();
     }
-    finally { pending = false; button.disabled = false; }
+    finally { pending = false; button.disabled = recoveryOnly && !retry; }
   });
   return form;
 }

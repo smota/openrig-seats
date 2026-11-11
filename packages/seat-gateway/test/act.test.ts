@@ -6,7 +6,9 @@ import { readdirSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseConfig } from "../src/index.js";
+import { parseConfig, IdempotencyTable } from "../src/index.js";
+import { AnswerAction } from "../src/answer.js";
+import { CoreAppJob, DaemonClient } from "@openrig-seats/seat-source-openrig";
 import { auth, MockDaemon, startGateway, waitFor, type Running } from "./helpers.js";
 
 const schemaDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../seat-protocol/schemas");
@@ -397,4 +399,28 @@ describe("Core app human-answer job", () => {
     expect(caps.features["x-openrig.core-app.human-answer"]).toBe(false);
     expect(caps.features.act).toBe(false);
   });
+});
+
+
+it.each(['{"submission":', '{"unexpected":true}'])("keeps an unreadable or unrecognized successful Core receipt uncertain: %s", async (rawReceipt) => {
+  const actor = "human-lee@external";
+  const calls: Array<{ path: string; body: string }> = [];
+  let receipt = rawReceipt;
+  const client = new DaemonClient({ baseUrl: "http://127.0.0.1:7433", token: "fictional-app-token", fetch: (async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/capabilities")) return Response.json({ contract: "openrig.core-app", version: 1, jobs: [{ id: "human-answer", answerForms: ["option"], actorAssurance: ["app-attributed"], stableSubmissionIds: true, resultRead: true }], app: { actors: [actor] } });
+    if (init?.method === "POST") { calls.push({ path, body: String(init.body) }); return new Response(receipt, { status: 200, headers: { "content-type": "application/json" } }); }
+    return Response.json({ version: 1, requests: [], sources: [{ source: "queue", state: "available" }] });
+  }) as typeof fetch });
+  const job = new CoreAppJob({ daemon: client, actor, actions: true }); await job.discover();
+  const table = new IdempotencyTable(file);
+  try {
+    const action = new AnswerAction({ job, actor, table });
+    const request = { kind: "attention", id: "core-app:A", action: "answer-option", idempotencyKey: "stable_1234", input: { actor, requestId: "A", questionId: "q1", episodeKey: null, expectedRevision: "dr1-rendered", optionId: "yes" } };
+    const first = await action.handle(request);
+    expect(first).toMatchObject({ httpStatus: 200, response: { status: "accepted", retrySameRequest: true, result: { answerId: expect.stringMatching(/^seats_[a-f0-9]{64}$/) } } });
+    receipt = JSON.stringify({ submission: { state: "committed" }, replayed: true });
+    expect(await action.handle(request)).toMatchObject({ response: { status: "completed", replayed: true } });
+    expect(calls[1]).toEqual(calls[0]);
+  } finally { table.close(); await job.stop(); }
 });

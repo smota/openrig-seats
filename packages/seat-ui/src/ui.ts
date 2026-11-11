@@ -1,6 +1,6 @@
 import { Mirror, isCoreKind, isStreamControl, toGenericCard, type ActInput, type Action, type Capabilities, type StreamItem } from "@openrig-seats/seat-protocol";
 import { element, field, record, text } from "./dom.js";
-import { createActionForm, ActionFormValidators } from "./forms.js";
+import { createActionForm, savedSubmissions, ActionFormValidators } from "./forms.js";
 
 export interface Snapshot { cursor: string; kinds: Record<string, Record<string, unknown>[]> }
 export interface UIOptions {
@@ -166,6 +166,15 @@ export class SeatUI {
       for (const action of actions) live.add(JSON.stringify([kind, item.id, action]));
     }
     for (const key of this.forms.keys()) if (!live.has(key)) this.forms.delete(key);
+    const recovery = element("section");
+    for (const saved of savedSubmissions()) {
+      const key = JSON.stringify([saved.kind, saved.id, saved.action]);
+      const current = this.forms.get(key)?.node;
+      if (current && (list.contains(current) || detail.contains(current))) continue;
+      if (!recovery.childNodes.length) recovery.append(element("h2", "Unresolved submissions"));
+      recovery.append(createActionForm(saved.kind, saved.id, { id: saved.action, label: `Recover ${saved.action} on ${saved.kind} ${saved.id}` }, this.options.act, undefined, this.validators, true));
+    }
+    if (recovery.childNodes.length) detail.append(recovery);
     this.content.replaceChildren(list, detail);
     if (active?.isConnected) {
       active.focus({ preventScroll: true });

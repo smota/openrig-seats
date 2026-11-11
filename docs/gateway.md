@@ -136,3 +136,13 @@ and polling every five seconds covers eventless changes. Filtered sequence jumps
 are not interpreted as missing facts. Partial/unavailable snapshots retain
 last-known questions and disable their executable actions until a complete read
 returns. Existing legacy source reset and coverage behavior stays in place.
+
+
+Unreadable or unrecognized successful answer receipts remain uncertain: HTTP
+success alone does not establish either a committed receipt or an authoritative
+refusal. The adapter preserves `retrySameRequest:true` and the original answer ID.
+The generic UI keeps saved submissions reachable under “Unresolved submissions”
+when their current action or item disappears, including after reload. These forms
+can only retry their original payload/key on explicit submission; a terminal
+receipt disables and clears recovery. They never create a new action or infer a
+new question revision from a refreshed snapshot.

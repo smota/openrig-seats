@@ -271,3 +271,44 @@ it("retains a generic retrySameRequest response while ordinary accepted sends st
   await vi.waitFor(() => expect(accepted).toHaveBeenCalledTimes(2));
   expect(accepted.mock.calls[1]![0].idempotencyKey).not.toBe(accepted.mock.calls[0]![0].idempotencyKey);
 });
+
+
+it.each(["receipt", "network"])("keeps exact generic submission recovery reachable after action disappearance and reload: %s", async (mode) => {
+  const root = document.createElement("div"); document.body.append(root); roots.push(root);
+  const capabilities = { ...caps(), features: { act: true } };
+  const submit = vi.fn(async (_input: ActInput) => ({ status: "accepted", retrySameRequest: true }));
+  if (mode === "network") submit.mockImplementation(async () => { throw new Error("receipt lost"); });
+  const action = { id: "choose", label: "Choose", input: { type: "object", required: ["revision", "value"], properties: { revision: { const: "rendered-r1" }, value: { type: "string", enum: ["yes", "no"] } } } };
+  const view = new SeatUI(root, { capabilities, act: submit });
+  view.snapshot({ cursor: "1", kinds: { attention: [{ id: "A", title: "Question", actions: [action] }] } });
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(root.querySelector("button")!.disabled).toBe(false));
+  const original = structuredClone(submit.mock.calls[0]![0]);
+  view.snapshot({ cursor: "2", kinds: { attention: [{ id: "A", title: "Recorded", actions: [] }] } });
+  expect(submit).toHaveBeenCalledTimes(1);
+  expect(root.textContent).toContain("Retry same submission");
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+  expect(submit.mock.calls[1]![0]).toEqual(original);
+  view.dispose();
+  const resumed = new SeatUI(root, { capabilities, act: submit });
+  resumed.snapshot({ cursor: "3", kinds: {} });
+  expect(submit).toHaveBeenCalledTimes(2);
+  expect(root.textContent).toContain("Retry same submission");
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(3));
+  expect(submit.mock.calls[2]![0]).toEqual(original);
+  await vi.waitFor(() => expect(root.querySelector("button")!.disabled).toBe(false));
+  submit.mockResolvedValue({ status: "completed", retrySameRequest: false });
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(4));
+  expect(submit.mock.calls[3]![0]).toEqual(original);
+  await vi.waitFor(() => expect(root.querySelector("button")!.disabled).toBe(true));
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  expect(submit).toHaveBeenCalledTimes(4);
+  resumed.snapshot({ cursor: "4", kinds: {} });
+  expect(root.querySelector("form")).toBeNull();
+  expect(localStorage.length).toBe(0);
+  resumed.dispose();
+});

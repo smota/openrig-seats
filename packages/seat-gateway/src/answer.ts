@@ -44,7 +44,9 @@ export class AnswerAction {
       const receipt = rec(result.body), submission = rec(receipt.submission);
       if (result.status >= 200 && result.status < 300 && submission.state === "committed") {
         response = { idempotencyKey: key, status: "completed", replayed: receipt.replayed === true, result: receipt as Json };
-      } else if ((result.status >= 500 || submission.state === "incomplete") && receipt.retrySameSubmission !== false) {
+      } else if ((result.status >= 200 && result.status < 300) || ((result.status >= 500 || submission.state === "incomplete") && receipt.retrySameSubmission !== false)) {
+        // A successful HTTP status without a recognized committed receipt is not a refusal:
+        // Core may have committed before JSON was truncated or an unknown response was read.
         response = { idempotencyKey: key, status: "accepted", replayed: false, retrySameRequest: true, result: { ...receipt, answerId, retrySameSubmission: true } };
       } else {
         httpStatus = result.status >= 400 ? result.status : 409;
