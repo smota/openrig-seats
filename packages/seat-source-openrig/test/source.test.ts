@@ -5,7 +5,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DaemonClient, OpenRigSource, type Change } from "../src/index.js";
+import { CoreAppJob, DaemonClient, OpenRigSource, type Change } from "../src/index.js";
 import { waitFor } from "./helpers.js";
 import { MockDaemon } from "./mock-daemon.js";
 
@@ -621,5 +621,52 @@ describe("x-openrig extension", () => {
     expect(source.current("x-openrig.event").length).toBe(200);
     await daemon.restart({ resetLog: true });
     await waitFor(() => source.current("x-openrig.event").length === 0, 6000, "events cleared");
+  });
+});
+
+
+describe("optional Core human-answer projection", () => {
+  const actor = "human-lee@external";
+  function setup() {
+    daemon.coreApp = { capabilities: { contract: "openrig.core-app", version: 1, jobs: [{ id: "human-answer", answerForms: ["option", "typed-reply"], actorAssurance: ["app-attributed"], stableSubmissionIds: true, resultRead: true }], app: { id: "fixture-seats", actors: [actor] } }, snapshot: { version: 1, sources: [{ source: "queue", state: "available" }], requests: [{ requestId: "A", asker: "lead-planner@acme-ops", actor: { address: actor }, askedPerson: actor, state: "pending", decisionRevision: "dr1-original", episodeKey: null, questions: [{ id: "q1", question: "Ship?", options: [{ id: "yes", label: "Yes" }] }, { id: "q2", question: "Notify?", options: [{ id: "no", label: "No" }] }], humanAnswers: {}, answer: { job: "human-answer", forms: ["option", "typed-reply"] } }] }, receipt: {}, result: {} };
+    const job = new CoreAppJob({ daemon: new DaemonClient({ baseUrl: daemon.url, token: "fictional-app-token" }), actor, actions: true });
+    make({ coreApp: job }); return job;
+  }
+  it("declares separately bound question actions and keeps typed reply on the first unanswered question", async () => {
+    setup(); await source.resync();
+    const item = source.current("attention").find((x) => x.id === "core-app:A")!;
+    const actions = item.actions as Array<Record<string, any>>;
+    expect(new Set(actions.map((x) => x.id)).size).toBe(actions.length);
+    expect(actions.filter((x) => x.id.startsWith("answer-typed"))).toHaveLength(1);
+    expect(actions.filter((x) => x.id.startsWith("answer-option")).map((x) => x.input.properties.questionId.const)).toEqual(["q1", "q2"]);
+    expect(item.seatId).toBe("node-a1");
+  });
+  it("preserves partial coverage without executable stale actions and clears only a complete untracked snapshot", async () => {
+    setup(); await source.resync();
+    daemon.coreApp!.snapshot = { version: 1, sources: [{ source: "queue", state: "partial" }], requests: [] };
+    await source.resync();
+    const retained = source.current("attention").find((x) => x.id === "core-app:A")!;
+    expect(retained).toBeDefined(); expect(retained.actions).toBeUndefined();
+    daemon.coreApp!.snapshot.sources = [{ source: "queue", state: "available" }]; await source.resync();
+    expect(source.current("attention").some((x) => x.id === "core-app:A")).toBe(false);
+  });
+  it("uses actor-scoped rereads on invalidation and reconnect without applying untrusted event payloads", async () => {
+    setup(); source.start();
+    await waitFor(() => source.current("attention").some((x) => x.id === "core-app:A"));
+    daemon.coreApp!.snapshot.requests = [];
+    daemon.emit({ kind: "invalidate", cursor: "opaque.filtered-jump", requestId: null, answer: "do not project me" });
+    await waitFor(() => !source.current("attention").some((x) => x.id === "core-app:A"));
+    expect(JSON.stringify(source.current("attention"))).not.toContain("do not project me");
+    const before = daemon.requests.filter((r) => r.path === "/api/apps/v1/needs-me").length;
+    daemon.dropStreams();
+    await waitFor(() => daemon.requests.filter((r) => r.path === "/api/apps/v1/needs-me").length > before);
+    expect(daemon.requests.filter((r) => r.path === "/api/apps/v1/needs-me").every((r) => r.query === `?actor=${encodeURIComponent(actor)}`)).toBe(true);
+    expect(daemon.requests.filter((r) => r.path === "/api/apps/v1/events").every((r) => r.query === "")).toBe(true);
+  });
+  it.each([2, 0])("unsupported contract version %s disables only the optional job", async (version) => {
+    const job = setup(); daemon.coreApp!.capabilities.version = version; await source.resync();
+    expect(job.available()).toBe(false);
+    expect(source.features().attention).toBe(true); expect(source.current("seat").length).toBeGreaterThan(0);
+    expect(source.current("attention").some((x) => x.id === "core-app:A")).toBe(false);
   });
 });

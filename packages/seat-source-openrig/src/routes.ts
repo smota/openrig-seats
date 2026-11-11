@@ -1,5 +1,10 @@
-/** Every daemon route this repository reads. Nothing outside this package names one. All are GET. */
+/** Source and Core app routes. App answers are POST; the other routes here are GET. */
 export const ROUTES = {
+  appCapabilities: "/api/apps/v1/capabilities",
+  appNeedsMe: (actor: string) => `/api/apps/v1/needs-me?actor=${encodeURIComponent(actor)}`,
+  appResult: (requestId: string, actor: string) => `/api/apps/v1/requests/${encodeURIComponent(requestId)}/result?actor=${encodeURIComponent(actor)}`,
+  appAnswer: (answerId: string) => `/api/apps/v1/answers/${encodeURIComponent(answerId)}`,
+  appEvents: "/api/apps/v1/events",
   uiEnabled: "/api/config/ui.enabled",
   terminal: (session: string) => `/api/terminal/${encodeURIComponent(session)}`,
   health: "/healthz",

@@ -14,7 +14,7 @@ function ui(capabilities = caps()) {
   const root = document.createElement("div"); document.body.append(root); roots.push(root);
   return { root, ui: new SeatUI(root, { capabilities, act: async (input) => ({ idempotencyKey: input.idempotencyKey!, status: "completed", replayed: false }) }) };
 }
-afterEach(() => { for (const root of roots.splice(0)) root.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { for (const root of roots.splice(0)) root.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
 
 describe("valid schema fixtures", () => {
   for (const kind of ["host", "rig", "seat", "turn", "attention", "work"]) {
@@ -235,4 +235,39 @@ it("replaces Ajv periodically so evicted nested schema IDs cannot accumulate", (
   expect(internals.ajv).not.toBe(original); expect(cache.size).toBe(2);
   const retained = cache.compile({ type: "object", properties: { value: { $id: "https://example.test/nested/301", type: "string" } } });
   expect(retained({ value: 1 })).toBe(false);
+});
+
+
+it("submits rendered Core binding unchanged and retries an uncertain answer with the original key", async () => {
+  const binding = { actor: "human-lee@external", requestId: "ask-1", questionId: "ship", episodeKey: null, expectedRevision: "dr1-rendered" };
+  const inputSchema = { type: "object", additionalProperties: false, required: [...Object.keys(binding), "optionId"], properties: { ...Object.fromEntries(Object.entries(binding).map(([key, value]) => [key, { const: value }])), optionId: { type: "string", enum: ["yes", "no"] } } };
+  const submit = vi.fn(async (_input: ActInput): Promise<unknown> => { throw new Error("receipt lost"); });
+  const form = createActionForm("attention", "core-app:ask-1", { id: "answer-option", label: "Answer", input: inputSchema }, submit);
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+  expect(submit.mock.calls[0]![0].input).toEqual({ ...binding, optionId: "yes" });
+  await vi.waitFor(() => expect(form.querySelector("button")!.disabled).toBe(false));
+  const resumed = createActionForm("attention", "core-app:ask-1", { id: "answer-option", label: "Answer", input: inputSchema }, submit);
+  resumed.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+  expect(submit.mock.calls[1]![0]).toEqual(submit.mock.calls[0]![0]);
+  expect(resumed.textContent).toContain("same submission");
+});
+
+
+it("retains a generic retrySameRequest response while ordinary accepted sends start a new request", async () => {
+  const submit = vi.fn(async (_input: ActInput) => ({ status: "accepted", retrySameRequest: true }));
+  const form = createActionForm("work", "w-retry", { id: "custom", label: "Run" }, submit);
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(form.querySelector("button")!.disabled).toBe(false));
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+  expect(submit.mock.calls[1]![0]).toEqual(submit.mock.calls[0]![0]);
+  const accepted = vi.fn(async (_input: ActInput) => ({ status: "accepted", result: { outcome: "retained" } }));
+  const send = createActionForm("seat", "s-retained", { id: "send", label: "Send" }, accepted);
+  send.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(send.querySelector("button")!.disabled).toBe(false));
+  send.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(accepted).toHaveBeenCalledTimes(2));
+  expect(accepted.mock.calls[1]![0].idempotencyKey).not.toBe(accepted.mock.calls[0]![0].idempotencyKey);
 });

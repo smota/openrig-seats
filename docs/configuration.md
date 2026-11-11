@@ -65,3 +65,46 @@ the embedded fixture demo but has no `/gateway` adapter. See
 The minimal example adds `GATEWAY_PORT` and `PORT` for its own local listeners;
 see [its README](../examples/minimal/README.md). These are example settings, not
 gateway CLI environment variables.
+
+## Optional Core human-answer job
+
+This is a separate opt-in integration with `openrig.core-app` contract v1. Seat
+protocol `1.0` does not imply that the daemon supports this job. Older Core,
+unsupported contract versions, unavailable discovery or an actor outside the app's
+credential scope disable this job while legacy reads and ordinary sends retain
+their own capability checks. The current compatibility pin covers the existing
+surfaces; it does not establish support for the new job.
+
+| Key | Default | Meaning / bounds |
+|---|---|---|
+| `coreApp.tokenFile` | Unset | Separate app bearer file, owner-only (`0600` or stricter), read server-side. Required when configuring the job. |
+| `coreApp.actor` | Unset | Canonical registered person address, for example `human-lee@external`. Core checks registration and the credential's actor scope. |
+| `coreApp.actions` | `false` | Enable question-bound answer actions only after successful discovery. |
+| `coreApp.idempotencyFile` | Unset | Required for actions; separate from ordinary send's table, one gateway per file. Stores binding hashes and request/actor IDs before POST, never answer bodies or Core receipts. |
+
+Provision the app credential through Core's local operator-authenticated flow,
+then transfer it into an app-owned secret file using exclusive create (`wx`, mode
+`0600`) inside an owner-only `0700` directory. Keep only that file path in gateway
+configuration. Do not use the operator or terminal bearer as the app credential,
+and never put the app credential in browser state, URLs or logs. Provisioning,
+rotation and revocation remain Core operator operations; this gateway does not
+administer credentials.
+
+Configuring the job opts into reading actual human questions and linked results,
+including their text, independently of the legacy `xOpenrig.includeText` switch.
+Discovery advertises `features["x-openrig.core-app.human-answer"]`; executable
+schemas are declared on individual attention items. With actions disabled, the
+questions are read-only. No credential is forwarded to the browser.
+
+Answer IDs are derived from the caller's stable idempotency key. Core owns
+submission bindings, conflicts, recovery and receipts. The gateway retains its
+small markers without the ordinary-send TTL; `act.maxKeys` bounds their count and
+a full file refuses new answers instead of forgetting tracked requests. Do not
+delete or move the file during an unresolved submission. Core still protects a
+reused answer ID if local markers are lost.
+
+The reference UI saves each unresolved action's original input and key in browser
+local storage before submitting, restores it when the form is recreated, and
+clears it on a terminal or acknowledged response without `retrySameRequest:true`. Network uncertainty and that neutral protocol hint retain the same submission for an explicit retry. Browser storage therefore contains pending answer text when a
+typed answer is unresolved; it contains no app bearer. API clients must likewise
+retain their original key and payload across retries. See [answer behavior](gateway.md).

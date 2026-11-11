@@ -2,8 +2,9 @@ import { serve, type ServerType } from "@hono/node-server";
 import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { PROTOCOL_VERSION, CORE_KINDS, OPENRIG_EVENT_KIND, OPENRIG_EXTENSION, OPENRIG_EXTENSION_VERSION, type Capabilities } from "@openrig-seats/seat-protocol";
-import { DaemonClient, OpenRigSource, readSecretFile, type Features } from "@openrig-seats/seat-source-openrig";
+import { CoreAppJob, DaemonClient, OpenRigSource, readSecretFile, type Features } from "@openrig-seats/seat-source-openrig";
 import { isLoopbackBind, type GatewayConfig } from "./config.js";
+import { AnswerAction } from "./answer.js";
 import { SendAction, sendAction } from "./act.js";
 import { IdempotencyTable } from "./idempotency.js";
 import { createApp, TERMINAL_KEY_HEADER } from "./server.js";
@@ -24,7 +25,7 @@ export interface GatewayOptions {
   log?: (message: string) => void;
 }
 
-/** Wires the OpenRig source to the store and the HTTP server. Never writes tmux, never opens the daemon's database. The only write is the optional `send` action over the daemon's transport route. */
+/** Wires the OpenRig source to the store and the HTTP server. Never writes tmux, never opens the daemon's database. Optional writes use ordinary transport send or the separately authenticated Core human-answer job. */
 export class Gateway {
   readonly store: Store;
   readonly source: OpenRigSource;
@@ -38,6 +39,9 @@ export class Gateway {
   private readonly terminalKey = randomBytes(32).toString("hex");
   private readonly sendAction: SendAction | undefined;
   private readonly table: IdempotencyTable | undefined;
+  private readonly answerTable: IdempotencyTable | undefined;
+  private readonly answerAction: AnswerAction | undefined;
+  private readonly coreApp: CoreAppJob | undefined;
 
   constructor(private readonly opts: GatewayOptions) {
     const { config } = opts;
@@ -63,7 +67,15 @@ export class Gateway {
         seats: () => this.store.items("seat") as Array<Record<string, unknown>>,
       });
     }
+    if (config.coreApp) {
+      const c = config.coreApp;
+      const appDaemon = new DaemonClient({ baseUrl: config.daemonUrl, token: readSecretFile(c.tokenFile, "Core app token") });
+      if (c.actions && c.idempotencyFile) this.answerTable = new IdempotencyTable(c.idempotencyFile, config.act.maxKeys, config.act.retentionDays * 86_400_000);
+      this.coreApp = new CoreAppJob({ daemon: appDaemon, actor: c.actor, actions: c.actions, tracked: this.answerTable?.trackedCoreRequests(c.actor) ?? [] });
+      if (this.answerTable) this.answerAction = new AnswerAction({ job: this.coreApp, actor: c.actor, table: this.answerTable });
+    }
     this.source = new OpenRigSource({
+      ...(this.coreApp ? { coreApp: this.coreApp } : {}),
       daemon,
       ...(sendEnabled ? { seatActions: [sendAction(config.act.maxLength)] } : {}),
       onChange: (c) => void this.store.apply(c),
@@ -80,7 +92,12 @@ export class Gateway {
       capabilities: () => this.capabilities(),
       enabledKinds: () => this.kinds(),
       ...(this.terminal ? { terminal: (id: string, signal?: AbortSignal) => this.terminal!.authorize(id, signal), terminalKey: this.terminalKey } : {}),
-      ...(this.sendAction ? { act: (b: unknown) => this.sendAction!.handle(b) } : {}),
+      ...(this.sendAction || this.answerAction ? { act: (b: unknown) => {
+        const action = b && typeof b === "object" ? (b as Record<string, unknown>).action : undefined;
+        if (typeof action === "string" && action.startsWith("answer-") && this.answerAction) return this.answerAction.handle(b);
+        if (this.sendAction) return this.sendAction.handle(b);
+        return Promise.resolve({ httpStatus: 400, response: { error: "unknown_action", message: "no such enabled action" } });
+      } } : {}),
       allowedOrigins: config.allowedOrigins,
       allowedHosts: config.allowedHosts,
       ...(opts.heartbeatMs !== undefined ? { heartbeatMs: opts.heartbeatMs } : {}),
@@ -105,7 +122,7 @@ export class Gateway {
 
   private kinds(): string[] {
     const f: Features = this.source.features();
-    return [...CORE_KINDS.filter((k): k is Exclude<typeof k, "turn"> => k !== "turn" && f[k]), OPENRIG_EVENT_KIND];
+    return [...CORE_KINDS.filter((k): k is Exclude<typeof k, "turn"> => k !== "turn" && (f[k] || (k === "attention" && this.coreApp?.available() === true))), OPENRIG_EVENT_KIND];
   }
 
   /** Features are probed against the daemon (a 404 turns one off) and the answer is reused for a while. */
@@ -114,6 +131,7 @@ export class Gateway {
     if (Date.now() - this.probedAt > ttl) {
       try {
         await this.source.probe();
+        await this.coreApp?.discover();
         this.probedAt = Date.now();
       } catch {
         /* daemon unreachable: keep the previous answer */
@@ -122,6 +140,7 @@ export class Gateway {
     const f = this.source.features();
     const harnesses = [...new Set(this.store.items("seat").map((s) => s.harness).filter((h): h is string => typeof h === "string"))].sort();
     const terminal = await this.terminal?.enabled() ?? false;
+    const actions = this.sendAction ? [{ kind: "seat", action: sendAction(this.opts.config.act.maxLength) }] : [];
     return {
       ...(terminal ? { terminal: { transport: "websocket" as const, path: "/terminal/{seatId}" as const, readOnly: true as const, output: "ansi-text" as const, clientFrames: ["scroll" as const], maxFrameBytes: this.opts.config.terminal.maxFrameBytes, maxViewers: this.opts.config.terminal.maxViewers } } : {}),
       protocol: { version: PROTOCOL_VERSION },
@@ -129,8 +148,8 @@ export class Gateway {
       extensions: [OPENRIG_EXTENSION],
       extensionVersions: { [OPENRIG_EXTENSION]: OPENRIG_EXTENSION_VERSION },
       harnesses,
-      ...(this.sendAction ? { actions: [{ kind: "seat", action: sendAction(this.opts.config.act.maxLength) }] } : {}),
-      features: { attention: f.attention, work: f.work, snapshot: true, resume: true, act: this.sendAction !== undefined, terminal, "x-openrig.text": this.opts.config.xOpenrig.includeText },
+      ...(actions.length ? { actions } : {}),
+      features: { "x-openrig.core-app.human-answer": this.coreApp?.available() === true, attention: f.attention || this.coreApp?.available() === true, work: f.work, snapshot: true, resume: true, act: this.sendAction !== undefined || this.coreApp?.actionsEnabled() === true, terminal, "x-openrig.text": this.opts.config.xOpenrig.includeText },
     };
   }
 
@@ -167,6 +186,7 @@ export class Gateway {
   async stop(): Promise<void> {
     this.terminal?.stop();
     this.table?.close();
+    this.answerTable?.close();
     await this.source.stop();
     const server = this.server as (ServerType & { closeAllConnections?: () => void }) | null;
     this.server = null;

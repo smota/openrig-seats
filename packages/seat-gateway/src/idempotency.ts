@@ -5,6 +5,8 @@ import type { ActResponse } from "@openrig-seats/seat-protocol";
 interface Entry {
   /** Hash of what the key was used for (never the text itself). */
   fingerprint: string;
+  /** Core owns deduplication; these entries are safe to retry with their original ID. */
+  coreAnswer?: { requestId: string; actor: string };
   at: string;
   /** Absent while the send is in flight. */
   response?: ActResponse;
@@ -123,7 +125,7 @@ export class IdempotencyTable {
     if (parsed?.version !== 1 || typeof parsed.entries !== "object" || parsed.entries === null) throw new Error("idempotency file has an unknown format");
     let changed = false;
     for (const [key, e] of Object.entries(parsed.entries)) {
-      if (!e.response) {
+      if (!e.response && !e.coreAnswer) {
         e.response = {
           idempotencyKey: key,
           status: "failed",
@@ -143,7 +145,7 @@ export class IdempotencyTable {
     const cutoff = Date.now() - this.retentionMs;
     let dropped = false;
     for (const [k, e] of this.entries) {
-      if (e.response && Date.parse(e.at) < cutoff) {
+      if (e.response && !e.coreAnswer && Date.parse(e.at) < cutoff) {
         this.entries.delete(k);
         dropped = true;
       }
@@ -155,17 +157,21 @@ export class IdempotencyTable {
     return this.entries.get(key);
   }
 
+  trackedCoreRequests(actor: string): string[] {
+    return [...new Set([...this.entries.values()].filter((e) => e.coreAnswer?.actor === actor).map((e) => e.coreAnswer!.requestId))];
+  }
+
   size(): number {
     return this.entries.size;
   }
 
   /** Records the key as in flight, durably, before anything is sent. Throws TableUnavailableError: then do not send. */
-  begin(key: string, fingerprint: string): void {
+  begin(key: string, fingerprint: string, coreAnswer?: { requestId: string; actor: string }): void {
     this.expire();
     if (this.entries.size >= this.maxKeys) {
       throw new TableUnavailableError("idempotency_table_full", `the idempotency table holds ${this.maxKeys} unexpired keys; sending is refused until some expire`);
     }
-    this.entries.set(key, { fingerprint, at: new Date().toISOString() });
+    this.entries.set(key, { fingerprint, at: new Date().toISOString(), ...(coreAnswer ? { coreAnswer } : {}) });
     try {
       this.persist();
     } catch {

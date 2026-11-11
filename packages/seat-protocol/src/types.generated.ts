@@ -405,6 +405,10 @@ status: ("accepted" | "completed" | "rejected" | "failed")
  */
 replayed: boolean
 /**
+ * True: the submission is unresolved; a client may explicitly retry the exact original request and idempotencyKey. Never mint a new key or infer action completion. Terminal responses clear this hint. Absent: existing status semantics apply.
+ */
+retrySameRequest?: boolean
+/**
  * Action-specific outcome.
  */
 result?: Json

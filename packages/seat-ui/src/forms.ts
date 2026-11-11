@@ -161,24 +161,45 @@ export function createActionForm(
   if (action.input === false) result.textContent = "This action accepts no valid input and cannot be submitted.";
   if (compileError) result.textContent = compileError;
   form.append(button, result);
+  const storageKey = JSON.stringify(["seat-recoverable-action-v1", kind, id, action.id]);
+  let retry: ActInput | undefined;
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+    if (saved && typeof saved === "object") {
+      const r = saved as ActInput;
+      if (r.kind === kind && r.id === id && r.action === action.id && typeof r.idempotencyKey === "string") retry = r;
+    }
+  } catch { /* A new submission still has to persist successfully below. */ }
+  const showRetry = () => { button.textContent = "Retry same submission"; result.textContent = `Retry the same submission before starting another action. Original input: ${JSON.stringify(retry?.input)}`; };
+  if (retry) showRetry();
   let pending = false;
   form.addEventListener("submit", async (event) => {
     event.preventDefault(); if (pending || button.disabled) return;
     let value: unknown;
     try {
-      if (action.input !== undefined) value = jsonMode ? JSON.parse(json.value) : nativeControl!.read();
-      if (validate && !validate(value)) {
+      if (!retry && action.input !== undefined) value = jsonMode ? JSON.parse(json.value) : nativeControl!.read();
+      if (!retry && validate && !validate(value)) {
         result.textContent = `Invalid input: ${validators.errorsText(validate)}`; return;
       }
     } catch { result.textContent = "Invalid input: enter valid JSON."; return; }
     if (action.danger && !confirm(`Run “${action.label}” on ${id}?`)) return;
     let key: string;
-    try { key = idempotencyKey(); }
+    try { key = retry?.idempotencyKey ?? idempotencyKey(); }
     catch { result.textContent = "Unable to generate a secure submission key. Please try again."; return; }
     pending = true; button.disabled = true; result.textContent = "Submitting…";
-    const input: ActInput = { kind, id, action: action.id, ...(action.input !== undefined ? { input: value as Json } : {}), idempotencyKey: key };
-    try { result.textContent = JSON.stringify(await submit(input), null, 2); }
-    catch { result.textContent = "Submission failed. Check the item before submitting again."; }
+    const input: ActInput = retry ?? { kind, id, action: action.id, ...(action.input !== undefined ? { input: value as Json } : {}), idempotencyKey: key };
+    try { localStorage.setItem(storageKey, JSON.stringify(input)); retry = input; }
+    catch { result.textContent = "Unable to save this action key. Submission is unavailable until browser storage is writable."; pending = false; button.disabled = false; return; }
+    try {
+      const response = await submit(input);
+      result.textContent = JSON.stringify(response, null, 2);
+      const r = record(response);
+      if (r.retrySameRequest === true && !["completed", "rejected", "failed"].includes(String(r.status))) showRetry();
+      else { localStorage.removeItem(storageKey); retry = undefined; button.textContent = action.label; }
+    }
+    catch {
+      showRetry();
+    }
     finally { pending = false; button.disabled = false; }
   });
   return form;

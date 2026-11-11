@@ -8,7 +8,7 @@ It runs server-side because OpenRig refuses a foreign browser `Origin`; the gate
 
 | Route | Content |
 |---|---|
-| `GET /capabilities` | Protocol version, served kinds (including `x-openrig.event`), extensions (`x-openrig`) with `extensionVersions`, harnesses seen, features. Each daemon route is probed (a 404 turns that feature and its kind off) and the answer is reused for 30 s. `features.act` is `false` and there is no `actions` list unless the operator enables `act.send` (see below). |
+| `GET /capabilities` | Protocol version, served kinds (including `x-openrig.event`), extensions (`x-openrig`) with `extensionVersions`, harnesses seen, features. Each daemon route is probed (a 404 turns that feature and its kind off) and the answer is reused for 30 s. `features.act` is `false` unless the operator enables ordinary send or discovered Core answer actions. Send declarations are global; answer schemas are bound to individual attention items. |
 | `GET /terminal/:seatId` | Optional read-only terminal WebSocket; raw ANSI output, scroll-only JSON input. Same bearer, Origin and Host checks. Off by default. |
 | `GET /stream` | SSE of the stream envelope `{cursor, kind, id, op, data}`; the SSE `id` is the cursor. Resume with `Last-Event-ID` (or `?cursor=`). |
 | `GET /snapshot/:kind`, `GET /snapshot?kind=` | Current items of one kind plus the cursor they are consistent with; without a kind, all served kinds. |
@@ -28,9 +28,9 @@ surfaces it (`onReset`, a yielded item) and `Mirror.apply` clears on it. A clien
 daemon process identity (`/healthz` pid), a gap or a backwards sequence also forgets the sequence. A
 failed refresh is retried on a bounded backoff. Redirects from the daemon are never followed. The queue
 route cannot be paged: a full page marks `work` incomplete (the host reports it) and suspends deletes. While the daemon is
-down the host is `offline` and cached items stay readable. The gateway only issues GET requests to the
-daemon, always with a bounded `replay` (default 2000, `replay=0` plus `Last-Event-ID` when resuming; the daemon's log is unbounded), never writes tmux and
-never opens the daemon's database. Request bodies of queue items are not copied into the protocol.
+down the host is `offline` and cached items stay readable. Legacy source reads issue GET requests to the
+daemon, with a bounded `replay` (default 2000, `replay=0` plus `Last-Event-ID` when resuming; the daemon's log is unbounded), never writes tmux and
+never opens the daemon's database. Legacy queue request bodies are not copied into the protocol. The separately configured Core job deliberately reads question/result text as described below.
 
 **`send` action (off by default).** With `act.send: true` the gateway declares `{id: "send", input: {text, maxLength}, danger: false}` on every `seat`, lists it in `/capabilities` (`features.act: true`, `actions`) and serves `POST /act` (same bearer as every route). It calls the daemon's `POST /api/transport/send` and nothing else; the config needs `act.sender` (a registered non-seat address such as `cockpit@<rig>`, sent as `x-openrig-session`, which the daemon treats as an unverified claim; a seat name is refused) and `act.idempotencyFile`. Never sent: `x-openrig-occupant-generation`, `force` or any override. The daemon token (`daemonTokenFile`, 0600) goes only to the literal loopback IP, with no redirects.
 - At most one send per `idempotencyKey`: the gateway's own table (a 0600 file, written before the daemon is called, holding a hash of the request and never the text) returns the stored response with `replayed: true`. A new key for the same text is a new send; the same key for a different request is refused. OpenRig's `deliveryId` is not relied on (it does not de-duplicate in draft-aware mode). A send in flight when the gateway stopped comes back as `failed`. Keys are kept for `act.retentionDays` (default 7) whatever the count; a table full of unexpired keys (`act.maxKeys`) answers 503 instead of evicting. The entry is fsynced (file, rename, directory) before the daemon is called, and if that fails nothing is sent. One gateway per table file: `<file>.lock` makes a second process refuse to start.
@@ -98,3 +98,41 @@ and sequence gap, gateway restart, slow and stalled clients, auth, Origin and Ho
 `SEAT_GATEWAY_SOAK_MS=3600000 npm test -w @openrig-seats/seat-gateway -- soak` runs the soak for an hour
 (default 3 s). `OPENRIG_SEATS_LIVE=1 OPENRIG_SEATS_LIVE_URL=http://127.0.0.1:<port>` adds GET-only live tests
 against a daemon (`OPENRIG_SEATS_LIVE_TOKEN_FILE` optionally names the daemon token file).
+
+## Core human-answer behavior
+
+The optional Core app job uses a distinct attention action. It never converts a
+`needs-input` seat into an ordinary-send target. Every rendered answer schema
+binds the canonical actor, request ID, question ID, episode and opaque decision
+revision. The gateway forwards those submitted values unchanged; Core refuses a
+stale render. The authenticated app attributes the registered person's answer as
+that person. This does not independently authenticate the person at Core, and an
+`X-OpenRig-Session` header supplies no app authentication.
+
+Option and whole-thread typed replies appear only when Core advertises those
+forms. Typed replies remain bound to the first unanswered question. Generic Core
+choices use existing text and enum action forms; ACP permission-option kinds are
+not inferred from choice labels. Multiple questions have distinct action IDs.
+
+A lost HTTP receipt is an uncertain submission. The adapter maps recoverable Core outcomes to the neutral optional protocol field `retrySameRequest:true`.
+Generic clients retain the original key and exact payload on network uncertainty or this flag, and retry only on explicit user submission. Completed/rejected/failed responses clear it. Ordinary accepted retained sends without the flag keep their existing behavior. Retry the original key and exact payload. The same stable Core answer ID is used
+after gateway restart; the gateway does not mint another ID, replay an unsafe
+send, or turn a local pending entry into a permanent failure. Every retry goes to
+Core's authoritative binding and receipt owner, including conflicting key reuse.
+An answer action marked `completed` means Core committed the answer submission;
+it does not mean a receiving agent granted permission or finished the work.
+
+The adapter follows the explicitly bound request's actor-scoped result route,
+including after its attention item disappears. Returned answers, permission
+status and actual linked work/results remain separate facts from Core; no idle
+seat, missing attention item or partial source establishes work completion.
+Result data is displayed as inert generic card text. External evidence references
+are descriptive and are never fetched or executed by the adapter.
+
+App events use the app bearer with no actor query. They invalidate actor-scoped
+snapshots and tracked result reads; their payloads never patch cached state.
+Every connection/reconnection rereads discovery, needs-me and tracked results,
+and polling every five seconds covers eventless changes. Filtered sequence jumps
+are not interpreted as missing facts. Partial/unavailable snapshots retain
+last-known questions and disable their executable actions until a complete read
+returns. Existing legacy source reset and coverage behavior stays in place.

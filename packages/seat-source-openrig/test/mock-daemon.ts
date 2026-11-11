@@ -31,6 +31,10 @@ export interface RecordedRequest {
  * It binds 127.0.0.1 only, like the real one, and refuses a foreign Origin.
  */
 export class MockDaemon {
+  coreApp: { capabilities: Record<string, unknown>; snapshot: Record<string, unknown>; receipt: Record<string, unknown>; result: Record<string, unknown> } | undefined;
+  appPosts: RecordedPost[] = [];
+  appBindings = new Map<string, string>();
+  dropAppReceipt = false;
   uiEnabled: unknown = false;
   readonly terminalFrames: string[] = [];
   readonly terminalHeaders: Array<Record<string, string | string[] | undefined>> = [];
@@ -150,6 +154,29 @@ export class MockDaemon {
       res.end(JSON.stringify(body));
     };
     if (req.headers.origin) return json(403, { error: "foreign origin" });
+    if (url.pathname.startsWith("/api/apps/v1/") && this.coreApp) {
+      if (req.headers.authorization !== "Bearer fictional-app-token") return json(401, { error: "unauthorized" });
+      if (req.method === "POST") {
+        let raw = "";
+        req.on("data", (d) => (raw += d));
+        req.on("end", () => {
+          const body = JSON.parse(raw) as Record<string, unknown>;
+          this.appPosts.push({ path: url.pathname, headers: { ...req.headers }, body });
+          const prior = this.appBindings.get(url.pathname), binding = JSON.stringify(body);
+          if (prior && prior !== binding) return json(409, { error: "answer_id_reused", retrySameSubmission: false });
+          if (!prior && body.expectedRevision !== "dr1-original") return json(409, { error: "decision_revision_changed" });
+          this.appBindings.set(url.pathname, binding);
+          if (this.dropAppReceipt) { this.dropAppReceipt = false; res.destroy(); return; }
+          json(200, { ...this.coreApp!.receipt, replayed: prior !== undefined, answerId: url.pathname.split("/").at(-1) });
+        });
+        return;
+      }
+      if (url.pathname.endsWith("/capabilities")) return json(200, this.coreApp.capabilities);
+      if (url.pathname.endsWith("/needs-me")) return json(200, this.coreApp.snapshot);
+      if (url.pathname.endsWith("/result")) return json(200, this.coreApp.result);
+      if (url.pathname.includes("/answers/")) return json(404, { error: "answer_not_found" });
+      if (url.pathname.endsWith("/events")) { res.writeHead(200, { "content-type": "text/event-stream" }); res.write(": open\n\n"); this.live.add(res); req.on("close", () => this.live.delete(res)); return; }
+    }
     if (req.method === "POST" && url.pathname === "/api/transport/send") {
       let raw = "";
       req.on("data", (d) => (raw += d));

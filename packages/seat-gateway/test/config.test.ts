@@ -90,3 +90,13 @@ describe("terminal config", () => {
     expect(parseConfig({ tokenFile: "t", terminal: { enabled: true, principal: "viewer@acme", maxViewers: 2, maxFrameBytes: 1024 } }).terminal).toMatchObject({ enabled: true, principal: "viewer@acme" });
   });
 });
+
+
+it("Core app answers require separate explicit credentials, canonical actor and opt-in durable actions", () => {
+  const base = { tokenFile: "gateway", coreApp: { tokenFile: "app", actor: "human-lee@external" } };
+  expect(parseConfig(base).coreApp).toMatchObject({ actions: false });
+  expect(() => parseConfig({ ...base, coreApp: { ...base.coreApp, actions: true } })).toThrow(/idempotencyFile/);
+  expect(() => parseConfig({ ...base, coreApp: { ...base.coreApp, actor: "builder@acme" } })).toThrow(/canonical human/);
+  expect(() => parseConfig({ ...base, coreApp: { ...base.coreApp, actions: "yes" } })).toThrow(/boolean/);
+  expect(() => parseConfig({ ...base, act: { send: true, sender: "cockpit@acme", idempotencyFile: "same" }, coreApp: { ...base.coreApp, actions: true, idempotencyFile: "same" } })).toThrow(/separate/);
+});

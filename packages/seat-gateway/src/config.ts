@@ -24,6 +24,8 @@ export interface GatewayConfig {
   /** Write side. Off by default: with `act.send` unset the gateway is read-only. */
   act: ActConfig;
   terminal: TerminalConfig;
+  /** Optional separately authenticated Core app job. Credentials never enter browser state. */
+  coreApp?: { tokenFile: string; actor: string; actions: boolean; idempotencyFile?: string };
   /** The `x-openrig` extension. */
   xOpenrig: {
     /** Carry the daemon's free text (error text, prompt reason or summary, hold reason, event summaries). Off by default: sensitive. */
@@ -99,7 +101,19 @@ export function parseConfig(raw: unknown): GatewayConfig {
   if (typeof maxViewers !== "number" || !Number.isInteger(maxViewers) || maxViewers < 1 || maxViewers > 1024) throw new Error("config.terminal.maxViewers must be an integer 1-1024");
   if (typeof maxFrameBytes !== "number" || !Number.isInteger(maxFrameBytes) || maxFrameBytes < 128 || maxFrameBytes > 1048576) throw new Error("config.terminal.maxFrameBytes must be an integer 128-1048576");
   const terminal: TerminalConfig = { enabled: t.enabled === true, ...(typeof t.principal === "string" ? { principal: t.principal } : {}), maxViewers, maxFrameBytes };
+  let coreApp: GatewayConfig["coreApp"];
+  if (r.coreApp !== undefined) {
+    const c = r.coreApp as Record<string, unknown>;
+    if (!c || typeof c !== "object" || Array.isArray(c)) throw new Error("config.coreApp must be an object");
+    if (typeof c.tokenFile !== "string" || !c.tokenFile) throw new Error("config.coreApp.tokenFile is required");
+    if (typeof c.actor !== "string" || !/^human-[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$/.test(c.actor)) throw new Error("config.coreApp.actor must be a registered canonical human address");
+    if (c.actions !== undefined && typeof c.actions !== "boolean") throw new Error("config.coreApp.actions must be a boolean");
+    if (c.actions === true && (typeof c.idempotencyFile !== "string" || !c.idempotencyFile)) throw new Error("config.coreApp.idempotencyFile is required when actions are enabled");
+    if (typeof c.idempotencyFile === "string" && c.idempotencyFile === act.idempotencyFile) throw new Error("Core answers and ordinary sends must use separate idempotency files");
+    coreApp = { tokenFile: expandHome(c.tokenFile), actor: c.actor, actions: c.actions === true, ...(typeof c.idempotencyFile === "string" ? { idempotencyFile: expandHome(c.idempotencyFile) } : {}) };
+  }
   return {
+    ...(coreApp ? { coreApp } : {}),
     daemonUrl,
     act,
     terminal,

@@ -312,3 +312,89 @@ describe("send action: outcomes and no retry", () => {
     expect(await json(await send(KEY("a")))).toMatchObject({ status: "rejected", error: { code: "daemon_auth_refused" } });
   });
 });
+
+
+describe("Core app human-answer job", () => {
+  const actor = "human-lee@external";
+  const input = { actor, requestId: "ask-1", questionId: "ship", episodeKey: null, expectedRevision: "dr1-original", optionId: "yes" };
+  const request = { requestId: "ask-1", asker: "builder@acme-ops", askedPerson: actor, actor: { address: actor, assurance: "app-attributed" }, state: "pending", decisionRevision: "dr1-original", episodeKey: null, questions: [{ id: "ship", question: "Ship the report?", options: [{ id: "yes", label: "Yes" }] }], humanAnswers: {}, answer: { job: "human-answer", forms: ["option", "typed-reply"] } };
+  const configure = async (actions = true) => {
+    const tokenFile = join(dir, "app-token"); writeFileSync(tokenFile, "fictional-app-token", { mode: 0o600 });
+    daemon.coreApp = {
+      capabilities: { contract: "openrig.core-app", version: 1, jobs: [{ id: "human-answer", answerForms: ["option", "typed-reply"], actorAssurance: ["app-attributed"], stableSubmissionIds: true, resultRead: true }], app: { id: "fixture-seats", actors: [actor] } },
+      snapshot: { version: 1, requests: [request], sources: [{ source: "queue", state: "available" }] },
+      receipt: { submission: { state: "committed", outcome: "answered" }, links: { result: `/api/apps/v1/requests/ask-1/result?actor=${encodeURIComponent(actor)}` } },
+      result: { answerReturn: { state: "returned", body: "Yes" }, permissionDecision: { state: "awaiting-agent" }, work: { completion: { status: "unknown" } } },
+    };
+    await start({ coreApp: { tokenFile, actor, actions, idempotencyFile: file } });
+  };
+  const answer = (key: string, binding = input) => act({ kind: "attention", id: "core-app:ask-1", action: "answer-option", input: binding, idempotencyKey: key });
+
+  it("discovers only the separately authenticated optional job and preserves ordinary send refusal", async () => {
+    await configure();
+    const caps = await json(await fetch(gw!.url + "/capabilities", { headers: auth }));
+    expect(caps.protocol.version).toBe("1.0");
+    expect(caps.features["x-openrig.core-app.human-answer"]).toBe(true);
+    expect(caps.features.act).toBe(true);
+    const item = gw!.gateway.store.items("attention").find((x) => x.id === "core-app:ask-1")!;
+    expect(item.summary).toContain("Ship the report?: Yes (yes)");
+    expect((item.actions as any[])[0].input.properties.expectedRevision).toEqual({ const: "dr1-original" });
+    expect(daemon.requests.filter((r) => r.path.startsWith("/api/apps/")).every((r) => r.authorization === "Bearer fictional-app-token")).toBe(true);
+    expect(JSON.stringify(caps) + JSON.stringify(item)).not.toContain("fictional-app-token");
+    expect((await send(KEY("unsafe"), "yes", "node-a2")).status).toBe(400);
+    expect(daemon.posts).toHaveLength(0);
+  });
+
+  it("passes the rendered binding unchanged and follows actual linked result without claiming work completion", async () => {
+    await configure();
+    const response = await json(await answer(KEY("core")));
+    expect(response).toMatchObject({ status: "completed", result: { submission: { state: "committed", outcome: "answered" } } });
+    expect(daemon.appPosts[0]!.body).toEqual({ job: "human-answer", actor, requestId: "ask-1", questionId: "ship", episodeKey: null, expectedRevision: "dr1-original", answer: { kind: "option", optionId: "yes" } });
+    expect(daemon.appPosts[0]!.headers["x-openrig-session"]).toBeUndefined();
+    await waitFor(() => JSON.stringify(gw!.gateway.store.items("attention")).includes("awaiting-agent"));
+    expect(JSON.stringify(gw!.gateway.store.items("attention"))).toContain('"status":"unknown"');
+  });
+
+  it("retries lost receipts with the same Core answer ID, including after gateway restart", async () => {
+    await configure(); daemon.dropAppReceipt = true;
+    expect(await json(await answer(KEY("lost")))).toMatchObject({ status: "accepted", result: { retrySameSubmission: true } });
+    await gw!.stop(); await configure();
+    expect(await json(await answer(KEY("lost")))).toMatchObject({ status: "completed", replayed: true });
+    expect(daemon.appBindings.size).toBe(1);
+    expect(readFileSync(file, "utf8")).not.toContain("submission");
+    expect(daemon.appPosts).toHaveLength(2);
+    expect(daemon.appPosts[1]!.path).toBe(daemon.appPosts[0]!.path);
+    expect(daemon.appPosts[1]!.body).toEqual(daemon.appPosts[0]!.body);
+  });
+
+  it("refuses stale rendered revision without replacing it and rejects actor substitution", async () => {
+    await configure();
+    expect(await json(await answer(KEY("stale"), { ...input, expectedRevision: "dr1-stale" }))).toMatchObject({ status: "rejected", error: { code: "decision_revision_changed" } });
+    expect(daemon.appPosts[0]!.body.expectedRevision).toBe("dr1-stale");
+    expect((await answer(KEY("actor"), { ...input, actor: "human-other@external" })).status).toBe(403);
+    expect(daemon.appPosts).toHaveLength(1);
+  });
+
+  it("lets Core refuse conflicting key reuse and retains authoritative results after attention vanishes", async () => {
+    await configure(); await answer(KEY("bound"));
+    expect(await json(await answer(KEY("bound"), { ...input, optionId: "no" }))).toMatchObject({ status: "rejected", error: { code: "answer_id_reused" } });
+    expect(daemon.appPosts).toHaveLength(2);
+    expect(daemon.appPosts[1]!.path).toBe(daemon.appPosts[0]!.path);
+    daemon.coreApp!.snapshot.requests = [];
+    await gw!.gateway.source.resync();
+    expect(gw!.gateway.store.items("attention").find((x) => x.id === "core-app:ask-1")!.summary).toContain("awaiting-agent");
+    expect(daemon.requests.some((r) => r.path === "/api/apps/v1/requests/ask-1/result" && r.query === `?actor=${encodeURIComponent(actor)}`)).toBe(true);
+  });
+
+  it("is read-only unless actions are explicitly enabled and degrades only the new job on unsupported Core", async () => {
+    await configure(false);
+    expect((await answer(KEY("off"))).status).toBe(405);
+    expect(gw!.gateway.store.items("attention").find((x) => x.id === "core-app:ask-1")!.actions).toBeUndefined();
+    daemon.coreApp!.capabilities.version = 2;
+    await gw!.gateway.source.resync();
+    const caps = await json(await fetch(gw!.url + "/capabilities", { headers: auth }));
+    expect(caps.features.attention).toBe(true);
+    expect(caps.features["x-openrig.core-app.human-answer"]).toBe(false);
+    expect(caps.features.act).toBe(false);
+  });
+});
