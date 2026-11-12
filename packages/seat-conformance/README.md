@@ -54,8 +54,9 @@ used. Build that checkout first and isolate provider/config namespaces when runn
 This is HTTP/SQLite and source proof, not native harness or deployed-daemon proof.
 
 The exact current pin is the local reviewed Core integration commit
-`812eecf9b6ad6853624e072da274665b7f3c92d2`, not a published release claim. The earlier reviewed app job
-checkpoint `a1e6593b16f956321ae320b679e5c1b9ea999ade` remains historical evidence.
+`56218f7717c035fcb7d73d28750330c1824f5122`, not a published release claim. The earlier reviewed app job
+checkpoint `a1e6593b16f956321ae320b679e5c1b9ea999ade` and integration checkpoint
+`812eecf9b6ad6853624e072da274665b7f3c92d2` remain historical evidence.
 Pre-pin comparison detected one retired legacy reason, `override_input_unknown`
 (409), removed upstream by `b29a70f14fc11797d46cbd9f12d4e61a523c3d06` (#2800): a
 deliberate override now proceeds when input is unreadable. The gateway never

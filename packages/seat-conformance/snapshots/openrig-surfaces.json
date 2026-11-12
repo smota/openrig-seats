@@ -1,6 +1,6 @@
 {
   "schema": "openrig-seats.conformance-snapshot/v1",
-  "openrigCommit": "812eecf9b6ad6853624e072da274665b7f3c92d2",
+  "openrigCommit": "56218f7717c035fcb7d73d28750330c1824f5122",
   "surfaces": {
     "coreApp": {
       "contract": "openrig.core-app",
