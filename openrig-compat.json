@@ -8,6 +8,12 @@
   "tested": [
     {
       "role": "pinned",
+      "commit": "812eecf9b6ad6853624e072da274665b7f3c92d2",
+      "subject": "Document and verify operation limits across runner classes",
+      "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"
+    },
+    {
+      "role": "previous",
       "commit": "a1e6593b16f956321ae320b679e5c1b9ea999ade",
       "subject": "fix(daemon): fence app permission recovery against occupant handover",
       "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"

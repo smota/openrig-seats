@@ -1,6 +1,6 @@
 {
   "schema": "openrig-seats.conformance-snapshot/v1",
-  "openrigCommit": "a1e6593b16f956321ae320b679e5c1b9ea999ade",
+  "openrigCommit": "812eecf9b6ad6853624e072da274665b7f3c92d2",
   "surfaces": {
     "coreApp": {
       "contract": "openrig.core-app",
@@ -258,6 +258,9 @@
     },
     "rigEventTypes": [
       "agent.activity",
+      "agent.runner_map_lost",
+      "agent.runner_turn",
+      "agent.runner_turn_fenced",
       "agent.session_identity",
       "binding.updated",
       "bootstrap.completed",
@@ -288,6 +291,7 @@
       "node.cwd_changed",
       "node.effort_changed",
       "node.held",
+      "node.input_route_changed",
       "node.launched",
       "node.model_changed",
       "node.permission_rules_changed",
