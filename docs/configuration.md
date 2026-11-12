@@ -72,8 +72,7 @@ This is a separate opt-in integration with `openrig.core-app` contract v1. Seat
 protocol `1.0` does not imply that the daemon supports this job. Older Core,
 unsupported contract versions, unavailable discovery or an actor outside the app's
 credential scope disable this job while legacy reads and ordinary sends retain
-their own capability checks. The current compatibility pin covers the existing
-surfaces; it does not establish support for the new job.
+their own capability checks. The compatibility pin records the exact reviewed Core app implementation validated by source re-extraction and isolated HTTP/SQLite whole-job fixtures. No release range or installed/native runtime compatibility is claimed.
 
 | Key | Default | Meaning / bounds |
 |---|---|---|

@@ -1,7 +1,27 @@
 {
   "schema": "openrig-seats.conformance-snapshot/v1",
-  "openrigCommit": "f5b62726ff759a857eeb76e2cbd654493fedba2f",
+  "openrigCommit": "a1e6593b16f956321ae320b679e5c1b9ea999ade",
   "surfaces": {
+    "coreApp": {
+      "contract": "openrig.core-app",
+      "version": 1,
+      "jobIds": [
+        "human-answer"
+      ],
+      "answerForms": [
+        "option",
+        "typed-reply"
+      ],
+      "actorAssurance": [
+        "app-attributed"
+      ],
+      "stableSubmissionIds": true,
+      "resultRead": true,
+      "independentHumanAuthentication": false,
+      "events": "invalidation-only",
+      "pollAfterMs": 5000,
+      "mounted": true
+    },
     "terminal": {
       "frameTypes": [
         "keys",
@@ -104,6 +124,7 @@
         "app POST /:qitemId/unclaim",
         "app POST /:qitemId/update",
         "app POST /create",
+        "app POST /erase",
         "app POST /inbox/:inboxId/absorb",
         "app POST /inbox/:inboxId/deny",
         "app POST /inbox/drop",
@@ -125,6 +146,18 @@
       ],
       "terminal": [
         "app GET /api/terminal/:sessionName"
+      ],
+      "coreApp": [
+        "app DELETE /v1/credentials/:credentialId",
+        "app GET /v1/answers/:answerId",
+        "app GET /v1/capabilities",
+        "app GET /v1/events",
+        "app GET /v1/needs-me",
+        "app GET /v1/requests/:requestId",
+        "app GET /v1/requests/:requestId/result",
+        "app GET /v1/work/:qitemId",
+        "app POST /v1/answers/:answerId",
+        "app POST /v1/credentials"
       ]
     },
     "tokens": {
@@ -153,7 +186,8 @@
         "offset",
         "scroll",
         "text"
-      ]
+      ],
+      "coreApp": []
     },
     "transport": {
       "outcomes": [
@@ -184,7 +218,6 @@
         "invalid_wait_for_idle": 400,
         "mid_work": 409,
         "override_input_present": 409,
-        "override_input_unknown": 409,
         "pane_in_mode": 409,
         "prompt_override_audit_unavailable": 500,
         "retained_quota_full": 409,
@@ -323,6 +356,8 @@
       "snapshot.created",
       "stream.emitted",
       "topology.roster_recorded",
+      "transport.delivery_evidence",
+      "transport.prompt_observation",
       "transport.prompt_override",
       "view.changed",
       "watchdog.evaluation_fired",

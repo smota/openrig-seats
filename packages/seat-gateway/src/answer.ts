@@ -15,13 +15,11 @@ export class AnswerAction {
     const key = b.idempotencyKey;
     if (typeof key !== "string" || key.length < 8 || key.length > 128) return { httpStatus: 400, response: { error: "invalid_request", message: "a stable idempotencyKey of 8 to 128 characters is required" } };
     const reject = (code: string, message: string, status = 400): ActResult => ({ httpStatus: status, response: { idempotencyKey: key, status: "rejected", replayed: false, error: { code, message } } });
-    if (!this.opts.job.actionsEnabled()) return reject("job_unavailable", "the Core human-answer job is unavailable", 503);
     if (b.kind !== "attention" || typeof b.id !== "string" || b.id !== `core-app:${String(input.requestId)}`) return reject("invalid_request", "answer must address the explicit Core request");
     if (input.actor !== this.opts.actor) return reject("actor_not_allowed", "answer actor must be the configured registered person", 403);
     if (typeof input.requestId !== "string" || !input.requestId || typeof input.questionId !== "string" || !input.questionId || typeof input.expectedRevision !== "string" || !input.expectedRevision || !(input.episodeKey === null || typeof input.episodeKey === "string")) return reject("invalid_request", "request, question, episode and rendered revision are required");
     const option = typeof b.action === "string" && /^answer-option(?::[a-f0-9]{24})?$/.test(b.action), typed = typeof b.action === "string" && /^answer-typed(?::[a-f0-9]{24})?$/.test(b.action);
     if (!option && !typed) return reject("unknown_action", "this job supports option or typed answers");
-    if (!this.opts.job.supports(option ? "option" : "typed-reply")) return reject("unsupported_answer_form", "Core did not advertise this answer form", 422);
     const allowed = new Set(["actor", "requestId", "questionId", "episodeKey", "expectedRevision", option ? "optionId" : "text"]);
     if (Object.keys(input).some((x) => !allowed.has(x))) return reject("invalid_request", "unknown answer input field");
     if (option && (typeof input.optionId !== "string" || !input.optionId)) return reject("invalid_request", "optionId is required");
@@ -32,6 +30,16 @@ export class AnswerAction {
     // The hash is diagnostic only. Core binds every immutable field, including conflicting key reuse.
     const fingerprint = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
     const known = this.opts.table.get(key);
+    if (!this.opts.job.actionsEnabled()) {
+      // Discovery can still be pending after restart. Keep only the already saved exact request
+      // uncertain; no marker or upstream write may be created while the job is unavailable.
+      if (known?.coreAnswer?.actor === this.opts.actor) {
+        if (known.fingerprint !== fingerprint || known.coreAnswer.requestId !== input.requestId) return reject("idempotency_key_reused", "this key was bound to a different answer", 409);
+        return { httpStatus: 200, response: { idempotencyKey: key, status: "accepted", replayed: false, retrySameRequest: true, result: { answerId, retrySameSubmission: true, reason: "job_unavailable" } } };
+      }
+      return reject("job_unavailable", "the Core human-answer job is unavailable", 503);
+    }
+    if (!this.opts.job.supports(option ? "option" : "typed-reply")) return reject("unsupported_answer_form", "Core did not advertise this answer form", 422);
     if (!known) try { this.opts.table.begin(key, fingerprint, { requestId: input.requestId, actor: input.actor }); }
     catch (err) {
       if (err instanceof TableUnavailableError) return reject(err.code, err.message, 503);

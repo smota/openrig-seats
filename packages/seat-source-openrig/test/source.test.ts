@@ -663,6 +663,20 @@ describe("optional Core human-answer projection", () => {
     expect(daemon.requests.filter((r) => r.path === "/api/apps/v1/needs-me").every((r) => r.query === `?actor=${encodeURIComponent(actor)}`)).toBe(true);
     expect(daemon.requests.filter((r) => r.path === "/api/apps/v1/events").every((r) => r.query === "")).toBe(true);
   });
+  it("stops both open streams promptly after the app contract becomes unsupported", async () => {
+    const job = setup(); source.start();
+    await waitFor(() => job.available() && source.status().connected && daemon.streamCount === 2);
+    daemon.coreApp!.capabilities.version = 2; await source.resync();
+    let deadline: ReturnType<typeof setTimeout>;
+    try {
+      await Promise.race([source.stop(), new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("source shutdown remained pending")), 500); })]);
+      await waitFor(() => daemon.streamCount === 0, 500, "both app and legacy stream cleanup");
+      await new Promise(done => setTimeout(done, 20));
+      const reads = daemon.requests.length;
+      await new Promise(done => setTimeout(done, 1100));
+      expect(daemon.streamCount).toBe(0); expect(daemon.requests).toHaveLength(reads);
+    } finally { clearTimeout(deadline!); }
+  });
   it.each([2, 0])("unsupported contract version %s disables only the optional job", async (version) => {
     const job = setup(); daemon.coreApp!.capabilities.version = version; await source.resync();
     expect(job.available()).toBe(false);

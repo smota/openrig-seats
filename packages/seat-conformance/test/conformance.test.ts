@@ -290,3 +290,30 @@ describe.skipIf(!available)("mutations of the checkout sources are detected", ()
     expect(problems.some((p) => p.includes("GET /open-human-updates"))).toBe(true);
   });
 });
+
+
+describe.skipIf(!available || !existsSync(resolve(root, "packages/daemon/src/routes/core-app.ts")))("optional Core app contract from the actual checkout", () => {
+  it("extracts the versioned routes and discovery contract independently of gateway protocol", () => {
+    const surfaces = extractSurfaces(root) as ReturnType<typeof extractSurfaces> & { coreApp?: Record<string, unknown> };
+    expect(surfaces.routes.coreApp).toContain("app POST /v1/answers/:answerId");
+    expect(surfaces.routes.coreApp).toContain("app GET /v1/requests/:requestId/result");
+    expect(surfaces.coreApp).toMatchObject({ contract: "openrig.core-app", version: 1, answerForms: ["option", "typed-reply"], stableSubmissionIds: true, resultRead: true, events: "invalidation-only", pollAfterMs: 5000 });
+  });
+  it("treats an absent optional facade as unavailable while still checking legacy removals", () => {
+    const expected = buildSnapshot(root), older = structuredClone(expected.surfaces);
+    delete older.coreApp; delete older.routes.coreApp; delete older.tokens.coreApp;
+    expect(diffRemovals(expected, older)).toEqual([]);
+    older.transport.outcomes = older.transport.outcomes.filter(o => o !== "retained");
+    expect(diffRemovals(expected, older)).toContain("transport outcome removed: retained");
+  });
+  it("detects a changed app contract major and removed app answer route from actual syntax", () => {
+    const expected = buildSnapshot(root), route = "packages/daemon/src/routes/core-app.ts";
+    const read = (from: string, to: string) => (rel: string) => {
+      const text = readFileSync(resolve(root, rel), "utf8");
+      if (rel !== route) return text;
+      expect(text).toContain(from); return text.replace(from, to);
+    };
+    expect(diffRemovals(expected, extractSurfaces(root, read("version: 1", "version: 2")))).toContain("core app version changed: 1 -> 2");
+    expect(diffRemovals(expected, extractSurfaces(root, read('app.post("/v1/answers/:answerId"', 'app.post("/v1/answer-renamed/:answerId"')))).toContain("route removed in coreApp: app POST /v1/answers/:answerId");
+  });
+});

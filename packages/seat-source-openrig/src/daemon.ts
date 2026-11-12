@@ -119,7 +119,7 @@ export class DaemonClient {
     if (!res.ok || !res.body) { await res.body?.cancel().catch(() => {}); throw new DaemonError("app events unavailable", res.status); }
     // The connection itself invalidates cached reads, even if replay has no data.
     yield;
-    for await (const _ of parseSSE(res.body, { maxLineBytes: 65536, maxEventBytes: 65536 })) yield;
+    for await (const _ of parseSSE(res.body, { maxLineBytes: 65536, maxEventBytes: 65536, signal })) yield;
   }
 
   /** Status of a GET without parsing: used by feature probes. */
@@ -151,7 +151,7 @@ export class DaemonClient {
       throw new DaemonError(`events stream refused: HTTP ${res.status}`, res.status);
     }
     opts.onOpen?.();
-    for await (const msg of parseSSE(res.body, opts.limits)) {
+    for await (const msg of parseSSE(res.body, { ...opts.limits, signal: opts.signal ?? opts.limits?.signal })) {
       let parsed: unknown;
       try {
         parsed = JSON.parse(msg.data);

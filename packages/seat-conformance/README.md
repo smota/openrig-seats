@@ -31,3 +31,35 @@ and JSON Schema dialect. The `seat-protocol` compatibility test runs under root 
 checks these against the manifest, `PROTOCOL_VERSION`, schema filenames and schema declarations.
 Update the compatibility matrix in the root README and `CHANGELOG.md` when changing the pin or
 protocol. A snapshot command still requires `OPENRIG_CHECKOUT`; it never guesses a local path.
+
+
+## Optional Core app job
+
+The current snapshot also extracts the actual `/api/apps` facade routes and literal
+`/v1/capabilities` discovery values (contract major, job/forms/assurance, stable
+submissions, result reads and refresh). Tests mutate actual source syntax to catch
+major/route changes. An older checkout without this facade is classified as job
+unavailable while its legacy contract is still checked; runtime discovery disables
+only the new job. Gateway protocol 1.0 is independent of Core app contract v1.
+
+With an explicit built `OPENRIG_CHECKOUT`, the existing gateway action suite runs
+additional whole-job fixtures. It imports that checkout's built Core owners and
+own native SQLite/Hono dependencies, migrates a private temporary SQLite file and
+serves the real app routes over private loopback HTTP. Only unrelated inventory
+reads use the existing fictional daemon. It provisions a fictional registered
+actor/app locally, then verifies answer binding, lost-receipt/gateway-restart
+recovery, encoded actor links, actual result/events/polling and permission status.
+Transport is stubbed; no installed daemon, native provider or real credential is
+used. Build that checkout first and isolate provider/config namespaces when running.
+This is HTTP/SQLite and source proof, not native harness or deployed-daemon proof.
+
+The exact new pin is the local reviewed Core commit
+`a1e6593b16f956321ae320b679e5c1b9ea999ade`, not a published release claim.
+Pre-pin comparison detected one retired legacy reason, `override_input_unknown`
+(409), removed upstream by `b29a70f14fc11797d46cbd9f12d4e61a523c3d06` (#2800): a
+deliberate override now proceeds when input is unreadable. The gateway never
+requests dangerous overrides; its tested payload remains exactly
+`{session,text,deliveryId,verify}`. This boundary was explicitly reviewed before
+regenerating the exact new snapshot. Removal detection and mutation assertions
+were not filtered or weakened. The old revision remains in the compatibility file
+as historical previous evidence; no broad version range is implied.

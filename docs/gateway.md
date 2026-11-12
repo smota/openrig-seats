@@ -146,3 +146,18 @@ when their current action or item disappears, including after reload. These form
 can only retry their original payload/key on explicit submission; a terminal
 receipt disables and clears recovery. They never create a new action or infer a
 new question revision from a refreshed snapshot.
+
+
+If discovery is pending or unavailable during a gateway restart, an already
+saved answer remains uncertain only when its full immutable binding hash and
+configured actor/request match the durable marker. The gateway returns
+`retrySameRequest:true` without creating a marker or contacting Core. Changed
+payloads conflict and new keys remain unavailable. Once discovery returns, an
+explicit retry uses the same Core answer ID and its authoritative receipt; no
+local marker is promoted to an answer receipt.
+
+App and legacy event shutdown explicitly cancel the parser-owned response reader when the
+stream signal aborts, including after fetch has returned headers. This lets a
+stopped source finish without waiting for another SSE frame. Pre-header aborts
+remain forwarded to fetch, cancellation errors are handled during cleanup, and
+non-abort reader failures retain their existing error behavior.

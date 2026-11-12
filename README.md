@@ -67,12 +67,12 @@ Other revisions need verification; no release range is claimed.
 
 | This repo version | OpenRig release or commit range | Protocol / schema version |
 |---|---|---|
-| Root `0.0.0`; packages `0.1.0` (private development versions) | `f5b62726ff759a857eeb76e2cbd654493fedba2f` only | Seat protocol `1.0`; schemas `v1` (JSON Schema 2020-12); `x-openrig` `1.0` |
+| Root `0.0.0`; packages `0.1.0` (private development versions) | `a1e6593b16f956321ae320b679e5c1b9ea999ade` only (local reviewed Core app job checkpoint) | Seat protocol `1.0`; schemas `v1` (JSON Schema 2020-12); `x-openrig` `1.0` |
 
 [openrig-compat.json](openrig-compat.json) is the machine-readable declaration.
 `npm test` checks declared protocol/schema versions against code and schemas.
 See [conformance checks and pin updates](packages/seat-conformance/README.md) and
-[CHANGELOG.md](CHANGELOG.md). Git history currently has no release tags.
+[CHANGELOG.md](CHANGELOG.md). Git history currently has no release tags. The previous `f5b62726ff759a857eeb76e2cbd654493fedba2f` entry is historical evidence for legacy surfaces, not a claim that older Core provides the optional app job.
 
 ## Troubleshooting
 

@@ -1,7 +1,11 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { serve } from "@hono/node-server";
+import type { Server as HttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { readdirSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
@@ -405,10 +409,10 @@ describe("Core app human-answer job", () => {
 it.each(['{"submission":', '{"unexpected":true}'])("keeps an unreadable or unrecognized successful Core receipt uncertain: %s", async (rawReceipt) => {
   const actor = "human-lee@external";
   const calls: Array<{ path: string; body: string }> = [];
-  let receipt = rawReceipt;
+  let receipt = rawReceipt, discovered = true;
   const client = new DaemonClient({ baseUrl: "http://127.0.0.1:7433", token: "fictional-app-token", fetch: (async (url, init) => {
     const path = String(url);
-    if (path.endsWith("/capabilities")) return Response.json({ contract: "openrig.core-app", version: 1, jobs: [{ id: "human-answer", answerForms: ["option"], actorAssurance: ["app-attributed"], stableSubmissionIds: true, resultRead: true }], app: { actors: [actor] } });
+    if (path.endsWith("/capabilities")) return Response.json({ contract: "openrig.core-app", version: 1, jobs: discovered ? [{ id: "human-answer", answerForms: ["option"], actorAssurance: ["app-attributed"], stableSubmissionIds: true, resultRead: true }] : [], app: { actors: [actor] } });
     if (init?.method === "POST") { calls.push({ path, body: String(init.body) }); return new Response(receipt, { status: 200, headers: { "content-type": "application/json" } }); }
     return Response.json({ version: 1, requests: [], sources: [{ source: "queue", state: "available" }] });
   }) as typeof fetch });
@@ -419,8 +423,135 @@ it.each(['{"submission":', '{"unexpected":true}'])("keeps an unreadable or unrec
     const request = { kind: "attention", id: "core-app:A", action: "answer-option", idempotencyKey: "stable_1234", input: { actor, requestId: "A", questionId: "q1", episodeKey: null, expectedRevision: "dr1-rendered", optionId: "yes" } };
     const first = await action.handle(request);
     expect(first).toMatchObject({ httpStatus: 200, response: { status: "accepted", retrySameRequest: true, result: { answerId: expect.stringMatching(/^seats_[a-f0-9]{64}$/) } } });
+    discovered = false; await job.discover();
+    expect(await action.handle(request)).toMatchObject({ response: { status: "accepted", retrySameRequest: true } });
+    expect(calls).toHaveLength(1);
+    expect(await action.handle({ ...request, input: { ...request.input, optionId: "no" } })).toMatchObject({ httpStatus: 409, response: { error: { code: "idempotency_key_reused" } } });
+    expect(await action.handle({ ...request, input: { ...request.input, actor: "human-other@external" } })).toMatchObject({ httpStatus: 403 });
+    expect(table.size()).toBe(1);
+    expect(await action.handle({ ...request, idempotencyKey: "new_request_123" })).toMatchObject({ httpStatus: 503, response: { status: "rejected" } });
+    discovered = true; await job.discover();
     receipt = JSON.stringify({ submission: { state: "committed" }, replayed: true });
     expect(await action.handle(request)).toMatchObject({ response: { status: "completed", replayed: true } });
     expect(calls[1]).toEqual(calls[0]);
   } finally { table.close(); await job.stop(); }
+});
+
+
+// Explicit checkout proof uses that tree's built owners and native SQLite dependency. No daemon boot/providers.
+const coreCheckout = process.env.OPENRIG_CHECKOUT;
+describe.skipIf(!coreCheckout)("actual Core app job through source and gateway", () => {
+  const actor = "human-fixture@external";
+  async function actualCore() {
+    const own = createRequire(resolve(coreCheckout!, "package.json"));
+    const load = (path: string) => import(/* @vite-ignore */ pathToFileURL(resolve(coreCheckout!, "packages/daemon/dist", path)).href);
+    const [migration, migrations, event, queue, accessModule, logModule, writeModule, jobModule, route, outbox, rigsModule, sessionsModule, permissionModule] = await Promise.all([
+      "db/migrate.js", "db/all-migrations.js", "domain/event-bus.js", "domain/queue-repository.js", "domain/core-app-access.js", "domain/mission-control/mission-control-action-log.js", "domain/mission-control/mission-control-write-contract.js", "domain/core-app-job.js", "routes/core-app.js", "domain/outbox-handler.js", "domain/rig-repository.js", "domain/session-registry.js", "domain/runner-permissions.js",
+    ].map(load));
+    const Database = own("better-sqlite3"), { Hono } = own("hono");
+    const db = new Database(join(dir, "actual-core.sqlite")); migration.migrate(db, migrations.ALL_MIGRATIONS);
+    const registry = { ok: true, entities: [{ entityId: "human-fixture", class: "human", displayName: "Fictional operator", address: actor, connectorBindings: [], prefs: { deliveryClass: "A" } }] };
+    const bus = new event.EventBus(db), repo = new queue.QueueRepository(db, bus, { validateRig: () => true, loadHumanRegistry: () => registry, permissionDecider: () => ({ session: "lead@fixture" }), transport: { send: async () => ({ ok: true, verified: true, sent: true }) } });
+    repo.attachOutbox(new outbox.OutboxHandler(db));
+    const access = new accessModule.CoreAppAccess(db, repo), log = new logModule.MissionControlActionLog(db);
+    const writes = new writeModule.MissionControlWriteContract({ db, eventBus: bus, queueRepo: repo, actionLog: log });
+    const job = new jobModule.CoreAppJob(access, repo, bus, writes, log);
+    const app = new Hono(), requests: Array<{ path: string; query: string; attribution: boolean }> = [], posts: Array<{ path: string; body: unknown }> = [];
+    let loseReceipt = false;
+    app.use("*", async (c: any, next: () => Promise<void>) => {
+      requests.push({ path: c.req.path, query: new URL(c.req.url).search, attribution: !!c.req.header("x-openrig-session") });
+      await next();
+      if (c.req.method === "POST" && c.req.path.includes("/answers/")) {
+        posts.push({ path: c.req.path, body: await c.req.json() });
+        if (loseReceipt && c.res.status === 200) { loseReceipt = false; c.res = new Response('{"submission":', { status: 200, headers: { "content-type": "application/json" } }); }
+      }
+    });
+    app.route("/api/apps", route.coreAppRoutes({ access, operatorToken: "fictional-operator", job }));
+    // Unrelated inventory comes from the existing fictional daemon, never from an installed Core.
+    app.all("*", (c: any) => fetch(daemon.url + new URL(c.req.url).pathname + new URL(c.req.url).search, { signal: c.req.raw.signal }));
+    const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }) as HttpServer;
+    await new Promise<void>((done, fail) => { server.once("listening", done); server.once("error", fail); });
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const provision = await fetch(url + "/api/apps/v1/credentials", { method: "POST", headers: { authorization: "Bearer fictional-operator", "content-type": "application/json" }, body: JSON.stringify({ appId: "seats-fixture", actors: [actor], job: "human-answer", attribution: "app-attributed" }) });
+    expect(provision.status).toBe(201);
+    const credential = await provision.json() as { token: string };
+    const appTokenFile = join(dir, "actual-app-token"); writeFileSync(appTokenFile, credential.token, { mode: 0o600 });
+    const config = { daemonUrl: url, act: { send: true, sender: SENDER, idempotencyFile: file }, coreApp: { tokenFile: appTokenFile, actor, actions: true, idempotencyFile: join(dir, "actual-answer-keys") } };
+    const start = async () => { gw = await startGateway(daemon, {}, config); };
+    const item = (id: string) => gw!.gateway.store.items("attention").find(i => i.id === `core-app:${id}`) as Record<string, any> | undefined;
+    const answer = async (id: string, key: string, option: string) => {
+      const card = await waitFor(() => item(id)?.actions?.length && item(id));
+      const declaration = card.actions.find((a: any) => a.id.startsWith("answer-option:"));
+      const input = Object.fromEntries(Object.entries(declaration.input.properties).filter(([, v]) => Object.hasOwn(v as object, "const")).map(([k, v]) => [k, (v as any).const]));
+      return { kind: "attention", id: card.id, action: declaration.id, input: { ...input, optionId: option }, idempotencyKey: key };
+    };
+    const permission = async () => {
+      const rigs = new rigsModule.RigRepository(db), rig = rigs.createRig("fixture"), node = rigs.addNode(rig.id, "runner", { runtime: "synth" });
+      const sessions = new sessionsModule.SessionRegistry(db); sessions.registerSession(node.id, "runner@fixture");
+      const generation = sessions.currentOccupantTenure(node.id).generationUuid;
+      const permissions = new permissionModule.RunnerPermissions({ db, queueRepo: repo, eventBus: bus, humanRegistry: () => registry, ownerOf: () => actor, currentGeneration: (id: string) => sessions.currentOccupantTenure(id)?.generationUuid ?? null });
+      const ask = await permissions.submit({ nodeId: node.id, sessionName: "runner@fixture", generation }, { nativeRef: "fictional-session", turnId: "fictional-turn", requestId: "fictional-permission", toolCall: { title: "Write fictional report", kind: "edit" }, options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "reject", name: "Reject once", kind: "reject_once" }] });
+      expect(ask.ok).toBe(true); return { permissions, askId: ask.askId };
+    };
+    const stop = async () => { await gw?.stop(); gw = undefined; server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); await waitFor(() => bus.subscriberCount === 0, 4000, "actual Core app SSE subscription cleanup"); db.close(); };
+    return { db, bus, repo, log, requests, posts, config, start, item, answer, permission, stop, url, token: credential.token, loseReceipt: () => { loseReceipt = true; } };
+  }
+
+  it("discovers, answers, recovers a lost receipt after gateway restart, and follows actual event/poll results", { timeout: 45000 }, async () => {
+    const f = await actualCore();
+    try {
+      const ask = await f.repo.create({ sourceSession: "lead-planner@acme-ops", destinationSession: actor, body: "Fictional report decision", humanIntent: "decision", humanQuestions: [{ id: "ship", question: "Ship the report?", options: [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }] }], nudge: false });
+      const work = await f.repo.create({ sourceSession: "builder@fixture", destinationSession: "builder@fixture", body: "Prepare fictional report", nudge: false });
+      f.repo.claim({ qitemId: work.qitemId, destinationSession: "builder@fixture" }); f.repo.update({ qitemId: work.qitemId, actorSession: "builder@fixture", state: "blocked", blockedOn: ask.qitemId });
+      await f.start();
+      const original = await f.answer(ask.qitemId, KEY("actual-core"), "yes");
+      const caps = await json(await fetch(gw!.url + "/capabilities", { headers: auth }));
+      expect(caps.features["x-openrig.core-app.human-answer"]).toBe(true); expect(caps.protocol.version).toBe("1.0");
+      f.loseReceipt();
+      expect(await json(await act(original))).toMatchObject({ status: "accepted", retrySameRequest: true });
+      expect(f.repo.getHumanAnswer(ask.qitemId, actor)?.sourceSession).toBe(actor);
+      await gw!.stop(); await f.start();
+      const initialRetry = await json(await act(original));
+      expect(["accepted", "completed"], JSON.stringify(initialRetry)).toContain(initialRetry.status);
+      if (initialRetry.status === "accepted") expect(initialRetry.retrySameRequest).toBe(true);
+      await waitFor(() => gw!.gateway.source.status().seatsSynced);
+      const replay = await json(await act(original));
+      expect(replay, JSON.stringify(replay)).toMatchObject({ status: "completed", replayed: true, result: { actor: { address: actor, assurance: "app-attributed" }, submission: { state: "committed", outcome: "answered" } } });
+      expect(f.posts.length).toBeGreaterThanOrEqual(2); for (const posted of f.posts) expect(posted).toEqual(f.posts[0]);
+      expect(f.log.countAll()).toBe(1); expect(f.db.prepare("SELECT COUNT(*) n FROM queue_items WHERE reply_to = ?").get(ask.qitemId)).toEqual({ n: 1 });
+      for (const link of Object.values(replay.result.links) as string[]) expect(link).toContain(`actor=${encodeURIComponent(actor)}`);
+      const request = await fetch(f.url + replay.result.links.request, { headers: { authorization: `Bearer ${f.token}` } });
+      expect(request.status).toBe(200); expect(await request.json()).toMatchObject({ requestId: ask.qitemId, actor: { address: actor } });
+      expect((await send(KEY("still-unsafe"), "yes", "node-a2")).status).toBe(409); expect(daemon.posts).toHaveLength(0);
+      await waitFor(() => f.requests.some(r => r.path === "/api/apps/v1/events"));
+      await new Promise(done => setTimeout(done, 200));
+      f.db.prepare("UPDATE queue_items SET blocked_on = NULL, state = 'in-progress' WHERE qitem_id = ?").run(work.qitemId);
+      const result = await f.repo.create({ sourceSession: "builder@fixture", destinationSession: actor, body: "Actual recorded result: fictional report delivered", inboundReplyTo: work.qitemId, humanIntent: "update", nudge: false });
+      f.repo.update({ qitemId: work.qitemId, actorSession: "builder@fixture", state: "done", closureReason: "no-follow-on", evidenceRef: "artifact:fictional-report" });
+      const current = await waitFor(() => f.item(ask.qitemId)?.["x-openrig.core-app"]?.result?.work?.records?.some((r: any) => r.qitemId === result.qitemId) && f.item(ask.qitemId));
+      expect(current["x-openrig.core-app"].result).toMatchObject({ answerReturn: { status: "returned" }, permissionDecision: { status: "not-applicable", nativeEffect: "unknown" }, work: { completion: { status: "unknown" } } });
+      expect(current["x-openrig.core-app"].result.work.edges).toContainEqual(expect.objectContaining({ from: ask.qitemId, to: work.qitemId, relation: "blocked-on", captured: true }));
+      await new Promise(done => setTimeout(done, 200));
+      const seq = f.bus.maxSeq(); f.db.prepare("UPDATE queue_items SET body = ? WHERE qitem_id = ?").run("Polled actual result without an event", result.qitemId);
+      await waitFor(() => JSON.stringify(f.item(ask.qitemId)).includes("Polled actual result without an event"), 8000, "mandatory poll of an eventless Core result change"); expect(f.bus.maxSeq()).toBe(seq);
+      expect(f.requests.filter(r => r.path === "/api/apps/v1/needs-me" || r.path.endsWith("/result")).every(r => r.query.includes(`actor=${encodeURIComponent(actor)}`))).toBe(true);
+      expect(f.requests.filter(r => r.path === "/api/apps/v1/events").every(r => r.query === "" && !r.attribution)).toBe(true);
+      expect((JSON.stringify(current) + JSON.stringify(caps)).includes(f.token)).toBe(false);
+    } finally { await f.stop(); }
+  });
+
+  it("keeps the human answer distinct from receiving-agent permission and unknown native effect", { timeout: 30000 }, async () => {
+    const f = await actualCore();
+    try {
+      const p = await f.permission(); await f.start();
+      expect(await json(await act(await f.answer(p.askId, KEY("actual-permission"), "allow")))).toMatchObject({ status: "completed" });
+      const waiting = await waitFor(() => f.item(p.askId)?.["x-openrig.core-app"]?.result?.permissionDecision?.status === "awaiting-agent" && f.item(p.askId));
+      expect(waiting["x-openrig.core-app"].result.answerReturn).toMatchObject({ status: "kept-for-agent", replyQitemId: null });
+      expect(waiting["x-openrig.core-app"].result.permissionDecision.nativeEffect).toBe("unknown");
+      expect(p.permissions.decide(p.askId, "allow", "lead@fixture", "Fictional receiving-agent decision")).toMatchObject({ state: "answered", optionId: "allow" });
+      await waitFor(() => f.item(p.askId)?.["x-openrig.core-app"]?.result?.permissionDecision?.status === "decided");
+      expect(f.item(p.askId)!["x-openrig.core-app"].result.permissionDecision).toMatchObject({ status: "decided", option: "allow", decider: "lead@fixture", nativeEffect: "unknown" });
+      expect(daemon.posts).toHaveLength(0);
+    } finally { await f.stop(); }
+  });
 });
