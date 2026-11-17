@@ -8,6 +8,7 @@
     "idempotencyKey": { "type": "string", "minLength": 8, "maxLength": 128 },
     "status": { "enum": ["accepted", "completed", "rejected", "failed"] },
     "replayed": { "type": "boolean", "description": "True: this key was seen before and the stored result is returned." },
+    "retrySameRequest": { "type": "boolean", "description": "True: the submission is unresolved; a client may explicitly retry the exact original request and idempotencyKey. Never mint a new key or infer action completion. Terminal responses clear this hint. Absent: existing status semantics apply." },
     "result": { "description": "Action-specific outcome." },
     "error": {
       "type": "object",

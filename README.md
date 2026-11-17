@@ -67,12 +67,12 @@ Other revisions need verification; no release range is claimed.
 
 | This repo version | OpenRig release or commit range | Protocol / schema version |
 |---|---|---|
-| Root `0.0.0`; packages `0.1.0` (private development versions) | `f5b62726ff759a857eeb76e2cbd654493fedba2f` only | Seat protocol `1.0`; schemas `v1` (JSON Schema 2020-12); `x-openrig` `1.0` |
+| Root `0.0.0`; packages `0.1.0` (private development versions) | `d2a1597d9055cd6471d7d9d15ba72d133da885e7` only (merged Core PR #3426 human-answer job) | Seat protocol `1.0`; schemas `v1` (JSON Schema 2020-12); `x-openrig` `1.0` |
 
 [openrig-compat.json](openrig-compat.json) is the machine-readable declaration.
 `npm test` checks declared protocol/schema versions against code and schemas.
 See [conformance checks and pin updates](packages/seat-conformance/README.md) and
-[CHANGELOG.md](CHANGELOG.md). Git history currently has no release tags.
+[CHANGELOG.md](CHANGELOG.md). Git history currently has no release tags. Previous entries retain historical evidence: `a6fed28926a6e1aa40919c7d7be72e92fa6a2c9d` was the last local candidate, `c090f8999dddba4bc8eef209572afd4f4766395c` was the prior local Core PR7 head, `812eecf9b6ad6853624e072da274665b7f3c92d2` was the earlier integration checkpoint, `a1e6593b16f956321ae320b679e5c1b9ea999ade` was the reviewed Core app job checkpoint, and `f5b62726ff759a857eeb76e2cbd654493fedba2f` covered legacy surfaces. They are not current snapshot pins or a claim that older Core provides the optional app job.
 
 ## Troubleshooting
 

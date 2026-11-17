@@ -8,6 +8,48 @@
   "tested": [
     {
       "role": "pinned",
+      "commit": "d2a1597d9055cd6471d7d9d15ba72d133da885e7",
+      "subject": "feat(daemon): add a versioned human-answer job for apps (#3426)",
+      "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"
+    },
+    {
+      "role": "previous",
+      "commit": "a6fed28926a6e1aa40919c7d7be72e92fa6a2c9d",
+      "subject": "fix(core-app): report positively deleted permission node as stale in result metadata",
+      "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"
+    },
+    {
+      "role": "previous",
+      "commit": "c090f8999dddba4bc8eef209572afd4f4766395c",
+      "subject": "fix(core-app): keep one authority probe per needs-me item inside the item boundary",
+      "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"
+    },
+    {
+      "role": "previous",
+      "commit": "7fb69c9a97f5623b1be30612d0cf050f7315117c",
+      "subject": "fix(daemon): keep healthy app asks through unknown permission tenure and close erased-answer oracle",
+      "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"
+    },
+    {
+      "role": "previous",
+      "commit": "56218f7717c035fcb7d73d28750330c1824f5122",
+      "subject": "fix(daemon): preserve legacy partial-answer retry semantics",
+      "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"
+    },
+    {
+      "role": "previous",
+      "commit": "812eecf9b6ad6853624e072da274665b7f3c92d2",
+      "subject": "Document and verify operation limits across runner classes",
+      "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"
+    },
+    {
+      "role": "previous",
+      "commit": "a1e6593b16f956321ae320b679e5c1b9ea999ade",
+      "subject": "fix(daemon): fence app permission recovery against occupant handover",
+      "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"
+    },
+    {
+      "role": "previous",
       "commit": "f5b62726ff759a857eeb76e2cbd654493fedba2f",
       "subject": "feat(transport): transport.draft_delivery lets ordinary sends reach a seat with a draft (#2645)",
       "snapshot": "packages/seat-conformance/snapshots/openrig-surfaces.json"

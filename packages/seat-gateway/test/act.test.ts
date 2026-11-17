@@ -1,12 +1,18 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { serve } from "@hono/node-server";
+import type { Server as HttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { readdirSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseConfig } from "../src/index.js";
+import { parseConfig, IdempotencyTable } from "../src/index.js";
+import { AnswerAction } from "../src/answer.js";
+import { CoreAppJob, DaemonClient } from "@openrig-seats/seat-source-openrig";
 import { auth, MockDaemon, startGateway, waitFor, type Running } from "./helpers.js";
 
 const schemaDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../seat-protocol/schemas");
@@ -180,7 +186,7 @@ describe("send action: idempotency", () => {
   it("a send left in flight by a crash comes back as failed and is never re-sent", async () => {
     await gw!.stop();
     const fp = (await import("node:crypto")).createHash("sha256").update(JSON.stringify(["seat", "node-a1", "send", "lost"])).digest("hex");
-    writeFileSync(file, JSON.stringify({ version: 1, entries: { [KEY("crash")]: { fingerprint: fp, at: "2026-11-07T12:00:00.000Z" } } }), { mode: 0o600 });
+    writeFileSync(file, JSON.stringify({ version: 1, entries: { [KEY("crash")]: { fingerprint: fp, at: new Date().toISOString() } } }), { mode: 0o600 });
     await start();
     const res = await send(KEY("crash"), "lost");
     expect(await json(res)).toMatchObject({ status: "failed", replayed: true, error: { code: "gateway_restarted_during_send" } });
@@ -310,5 +316,508 @@ describe("send action: outcomes and no retry", () => {
   it("daemon authentication refusal is a rejection", async () => {
     reply(401, { error: "unauthorized" });
     expect(await json(await send(KEY("a")))).toMatchObject({ status: "rejected", error: { code: "daemon_auth_refused" } });
+  });
+});
+
+
+describe("Core app human-answer job", () => {
+  const actor = "human-lee@external";
+  const input = { actor, requestId: "ask-1", questionId: "ship", episodeKey: null, expectedRevision: "dr1-original", optionId: "yes" };
+  const request = { requestId: "ask-1", asker: "builder@acme-ops", askedPerson: actor, actor: { address: actor, assurance: "app-attributed" }, state: "pending", decisionRevision: "dr1-original", episodeKey: null, questions: [{ id: "ship", question: "Ship the report?", options: [{ id: "yes", label: "Yes" }] }], humanAnswers: {}, answer: { job: "human-answer", forms: ["option", "typed-reply"] } };
+  const configure = async (actions = true) => {
+    const tokenFile = join(dir, "app-token"); writeFileSync(tokenFile, "fictional-app-token", { mode: 0o600 });
+    daemon.coreApp = {
+      capabilities: { contract: "openrig.core-app", version: 1, jobs: [{ id: "human-answer", answerForms: ["option", "typed-reply"], actorAssurance: ["app-attributed"], stableSubmissionIds: true, resultRead: true }], app: { id: "fixture-seats", actors: [actor] } },
+      snapshot: { version: 1, requests: [request], sources: [{ source: "queue", state: "available" }] },
+      receipt: { submission: { state: "committed", outcome: "answered" }, links: { result: `/api/apps/v1/requests/ask-1/result?actor=${encodeURIComponent(actor)}` } },
+      result: { answerReturn: { state: "returned", body: "Yes" }, permissionDecision: { state: "awaiting-agent" }, work: { completion: { status: "unknown" } } },
+    };
+    await start({ coreApp: { tokenFile, actor, actions, idempotencyFile: file } });
+  };
+  const answer = (key: string, binding = input) => act({ kind: "attention", id: "core-app:ask-1", action: "answer-option", input: binding, idempotencyKey: key });
+
+  it("discovers only the separately authenticated optional job and preserves ordinary send refusal", async () => {
+    await configure();
+    const caps = await json(await fetch(gw!.url + "/capabilities", { headers: auth }));
+    expect(caps.protocol.version).toBe("1.0");
+    expect(caps.features["x-openrig.core-app.human-answer"]).toBe(true);
+    expect(caps.features.act).toBe(true);
+    const item = gw!.gateway.store.items("attention").find((x) => x.id === "core-app:ask-1")!;
+    expect(item.summary).toContain("Ship the report?: Yes (yes)");
+    expect((item.actions as any[])[0].input.properties.expectedRevision).toEqual({ const: "dr1-original" });
+    expect(daemon.requests.filter((r) => r.path.startsWith("/api/apps/")).every((r) => r.authorization === "Bearer fictional-app-token")).toBe(true);
+    expect(JSON.stringify(caps) + JSON.stringify(item)).not.toContain("fictional-app-token");
+    expect((await send(KEY("unsafe"), "yes", "node-a2")).status).toBe(400);
+    expect(daemon.posts).toHaveLength(0);
+  });
+
+  it("passes the rendered binding unchanged and follows actual linked result without claiming work completion", async () => {
+    await configure();
+    const response = await json(await answer(KEY("core")));
+    expect(response).toMatchObject({ status: "completed", result: { submission: { state: "committed", outcome: "answered" } } });
+    expect(daemon.appPosts[0]!.body).toEqual({ job: "human-answer", actor, requestId: "ask-1", questionId: "ship", episodeKey: null, expectedRevision: "dr1-original", answer: { kind: "option", optionId: "yes" } });
+    expect(daemon.appPosts[0]!.headers["x-openrig-session"]).toBeUndefined();
+    await waitFor(() => JSON.stringify(gw!.gateway.store.items("attention")).includes("awaiting-agent"));
+    expect(JSON.stringify(gw!.gateway.store.items("attention"))).toContain('"status":"unknown"');
+  });
+
+  it("keeps unknown authority answerable and displays Core's authority detail and question body", async () => {
+    await configure();
+    Object.assign((daemon.coreApp!.snapshot.requests as Record<string, unknown>[])[0]!, { body: "Fictional permission request", occupantAuthority: "unknown", occupantAuthorityDetail: "The asking seat cannot be confirmed current." });
+    await gw!.gateway.source.resync();
+    const card = gw!.gateway.store.items("attention").find(x => x.id === "core-app:ask-1")!;
+    expect((card.actions as unknown[]).length).toBeGreaterThan(0);
+    expect(card.summary).toContain("Fictional permission request");
+    expect(card.summary).toContain("The asking seat cannot be confirmed current.");
+    expect(card["x-openrig.core-app"]).toMatchObject({ occupantAuthority: "unknown" });
+  });
+
+  it("retries lost receipts with the same Core answer ID, including after gateway restart", async () => {
+    await configure(); daemon.dropAppReceipt = true;
+    expect(await json(await answer(KEY("lost")))).toMatchObject({ status: "accepted", result: { retrySameSubmission: true } });
+    await gw!.stop(); await configure();
+    expect(await json(await answer(KEY("lost")))).toMatchObject({ status: "completed", replayed: true });
+    expect(daemon.appBindings.size).toBe(1);
+    expect(readFileSync(file, "utf8")).not.toContain("submission");
+    expect(daemon.appPosts).toHaveLength(2);
+    expect(daemon.appPosts[1]!.path).toBe(daemon.appPosts[0]!.path);
+    expect(daemon.appPosts[1]!.body).toEqual(daemon.appPosts[0]!.body);
+  });
+
+  it("refuses stale rendered revision without replacing it and rejects actor substitution", async () => {
+    await configure();
+    expect(await json(await answer(KEY("stale"), { ...input, expectedRevision: "dr1-stale" }))).toMatchObject({ status: "rejected", error: { code: "decision_revision_changed" } });
+    expect(daemon.appPosts[0]!.body.expectedRevision).toBe("dr1-stale");
+    expect((await answer(KEY("actor"), { ...input, actor: "human-other@external" })).status).toBe(403);
+    expect(daemon.appPosts).toHaveLength(1);
+  });
+
+  it("lets Core refuse conflicting key reuse and retains authoritative results after attention vanishes", async () => {
+    await configure(); await answer(KEY("bound"));
+    expect(await json(await answer(KEY("bound"), { ...input, optionId: "no" }))).toMatchObject({ status: "rejected", error: { code: "answer_id_reused" } });
+    expect(daemon.appPosts).toHaveLength(2);
+    expect(daemon.appPosts[1]!.path).toBe(daemon.appPosts[0]!.path);
+    daemon.coreApp!.snapshot.requests = [];
+    await gw!.gateway.source.resync();
+    expect(gw!.gateway.store.items("attention").find((x) => x.id === "core-app:ask-1")!.summary).toContain("awaiting-agent");
+    expect(daemon.requests.some((r) => r.path === "/api/apps/v1/requests/ask-1/result" && r.query === `?actor=${encodeURIComponent(actor)}`)).toBe(true);
+  });
+
+  it("is read-only unless actions are explicitly enabled and degrades only the new job on unsupported Core", async () => {
+    await configure(false);
+    expect((await answer(KEY("off"))).status).toBe(405);
+    expect(gw!.gateway.store.items("attention").find((x) => x.id === "core-app:ask-1")!.actions).toBeUndefined();
+    daemon.coreApp!.capabilities.version = 2;
+    await gw!.gateway.source.resync();
+    const caps = await json(await fetch(gw!.url + "/capabilities", { headers: auth }));
+    expect(caps.features.attention).toBe(true);
+    expect(caps.features["x-openrig.core-app.human-answer"]).toBe(false);
+    expect(caps.features.act).toBe(false);
+  });
+});
+
+
+it.each(['{"submission":', '{"unexpected":true}'])("keeps an unreadable or unrecognized successful Core receipt uncertain: %s", async (rawReceipt) => {
+  const actor = "human-lee@external";
+  const calls: Array<{ path: string; body: string }> = [];
+  let receipt = rawReceipt, discovered = true;
+  const client = new DaemonClient({ baseUrl: "http://127.0.0.1:7433", token: "fictional-app-token", fetch: (async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/capabilities")) return Response.json({ contract: "openrig.core-app", version: 1, jobs: discovered ? [{ id: "human-answer", answerForms: ["option"], actorAssurance: ["app-attributed"], stableSubmissionIds: true, resultRead: true }] : [], app: { actors: [actor] } });
+    if (init?.method === "POST") { calls.push({ path, body: String(init.body) }); return new Response(receipt, { status: 200, headers: { "content-type": "application/json" } }); }
+    return Response.json({ version: 1, requests: [], sources: [{ source: "queue", state: "available" }] });
+  }) as typeof fetch });
+  const job = new CoreAppJob({ daemon: client, actor, actions: true }); await job.discover();
+  const table = new IdempotencyTable(file);
+  try {
+    const action = new AnswerAction({ job, actor, table });
+    const request = { kind: "attention", id: "core-app:A", action: "answer-option", idempotencyKey: "stable_1234", input: { actor, requestId: "A", questionId: "q1", episodeKey: null, expectedRevision: "dr1-rendered", optionId: "yes" } };
+    const first = await action.handle(request);
+    expect(first).toMatchObject({ httpStatus: 200, response: { status: "accepted", retrySameRequest: true, result: { answerId: expect.stringMatching(/^seats_[a-f0-9]{64}$/) } } });
+    discovered = false; await job.discover();
+    expect(await action.handle(request)).toMatchObject({ response: { status: "accepted", retrySameRequest: true } });
+    expect(calls).toHaveLength(1);
+    expect(await action.handle({ ...request, input: { ...request.input, optionId: "no" } })).toMatchObject({ httpStatus: 409, response: { error: { code: "idempotency_key_reused" } } });
+    expect(await action.handle({ ...request, input: { ...request.input, actor: "human-other@external" } })).toMatchObject({ httpStatus: 403 });
+    expect(table.size()).toBe(1);
+    expect(await action.handle({ ...request, idempotencyKey: "new_request_123" })).toMatchObject({ httpStatus: 503, response: { status: "rejected" } });
+    discovered = true; await job.discover();
+    receipt = JSON.stringify({ submission: { state: "committed" }, replayed: true });
+    expect(await action.handle(request)).toMatchObject({ response: { status: "completed", replayed: true } });
+    expect(calls[1]).toEqual(calls[0]);
+  } finally { table.close(); await job.stop(); }
+});
+
+
+/** A fictional Core app: Core dedupes by answer ID permanently, so a replay is committed and a changed payload conflicts. */
+function fictionalCore(actor: string) {
+  const posts: Array<{ path: string; body: string }> = [], resultReads: string[] = [], bound = new Map<string, string>();
+  let postFault: ((path: string) => Response | "throw" | undefined) | undefined;
+  const client = new DaemonClient({ baseUrl: "http://127.0.0.1:7433", token: "fictional-app-token", fetch: (async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith("/capabilities")) return Response.json({ contract: "openrig.core-app", version: 1, jobs: [{ id: "human-answer", answerForms: ["option"], actorAssurance: ["app-attributed"], stableSubmissionIds: true, resultRead: true }], app: { actors: [actor] } });
+    if (init?.method === "POST") {
+      posts.push({ path, body: String(init.body) });
+      const fault = postFault?.(path);
+      // A lost receipt: Core committed before the reply was lost.
+      if (fault === "throw") { if (!bound.has(path)) bound.set(path, String(init.body)); throw new Error("receipt lost"); }
+      if (fault) return fault;
+      const prior = bound.get(path); if (prior !== undefined && prior !== String(init.body)) return Response.json({ error: "answer_id_conflict" }, { status: 409 });
+      bound.set(path, String(init.body));
+      return Response.json({ submission: { state: "committed", outcome: "answered" }, replayed: prior !== undefined });
+    }
+    if (path.endsWith("/result")) { resultReads.push(path.split("/").at(-2)!); return Response.json({ answerReturn: { status: "returned" } }); }
+    return Response.json({ version: 1, requests: [], sources: [{ source: "queue", state: "available" }] });
+  }) as typeof fetch });
+  return { client, posts, resultReads, fault: (f: typeof postFault) => { postFault = f; } };
+}
+const coreAnswerRequest = (requestId: string, key: string, actor: string, optionId = "yes") => ({ kind: "attention", id: `core-app:${requestId}`, action: "answer-option", idempotencyKey: key,
+  input: { actor, requestId, questionId: "q1", episodeKey: null, expectedRevision: "dr1-rendered", optionId } });
+
+describe("Core answer custody and marker lifecycle", () => {
+  const actor = "alex@external";
+  it.each([
+    ["401 credential", () => Response.json({ error: "invalid_credential" }, { status: 401 })],
+    ["403 credential scope", () => Response.json({ error: "actor_not_allowed" }, { status: 403 })],
+    ["404 missing route", () => new Response("Not Found", { status: 404 })],
+  ] as const)("keeps an unresolved answer retryable under the same key through %s loss, never minting a new ID", async (_name, lost) => {
+    const core = fictionalCore(actor), job = new CoreAppJob({ daemon: core.client, actor, actions: true }); await job.discover();
+    const table = new IdempotencyTable(file), action = new AnswerAction({ job, actor, table });
+    try {
+      const request = coreAnswerRequest("A", "stable_1234", actor);
+      core.fault(() => "throw");
+      expect(await action.handle(request)).toMatchObject({ response: { status: "accepted", retrySameRequest: true } });
+      core.fault(lost);
+      const during = await action.handle(request);
+      expect(during).toMatchObject({ httpStatus: 200, response: { status: "accepted", retrySameRequest: true, result: { retrySameSubmission: true } } });
+      expect(table.get("stable_1234")?.coreAnswer?.status).toBeUndefined();
+      core.fault(() => undefined);
+      expect(await action.handle(request)).toMatchObject({ response: { status: "completed", replayed: true } });
+      expect(new Set(core.posts.map((p) => p.path)).size).toBe(1); for (const p of core.posts) expect(p).toEqual(core.posts[0]);
+      expect(table.get("stable_1234")?.coreAnswer?.status).toBe("completed");
+    } finally { table.close(); await job.stop(); }
+  });
+
+  it.each([
+    { error: "app_job_unavailable", submission: { state: "unsaved" } },
+    { error: "app_job_unavailable", submission: { state: "unknown" } },
+    { error: "submission_incomplete", submission: { state: "incomplete" } },
+    { error: "app_job_unavailable" },
+  ])("preserves the exact 503 persistence facts and retries the same ID: %j", async (body) => {
+    const core = fictionalCore(actor), job = new CoreAppJob({ daemon: core.client, actor, actions: true }); await job.discover();
+    const table = new IdempotencyTable(file), action = new AnswerAction({ job, actor, table });
+    try {
+      const request = coreAnswerRequest("A", "stable_5030", actor);
+      core.fault(() => Response.json(body, { status: 503 }));
+      expect(await action.handle(request)).toMatchObject({ response: { status: "accepted", retrySameRequest: true, result: body } });
+      expect(table.get(request.idempotencyKey)?.coreAnswer?.status).toBeUndefined();
+      core.fault(() => undefined);
+      expect(await action.handle(request)).toMatchObject({ response: { status: "completed" } });
+      expect(core.posts[1]).toEqual(core.posts[0]);
+    } finally { table.close(); await job.stop(); }
+  });
+
+  it("still treats a recognized definitive Core refusal of an unresolved answer as rejected", async () => {
+    const core = fictionalCore(actor), job = new CoreAppJob({ daemon: core.client, actor, actions: true }); await job.discover();
+    const table = new IdempotencyTable(file), action = new AnswerAction({ job, actor, table });
+    try {
+      const request = coreAnswerRequest("A", "stable_1234", actor);
+      core.fault(() => "throw"); await action.handle(request);
+      core.fault(() => Response.json({ error: "request_not_found" }, { status: 404 }));
+      expect(await action.handle(request)).toMatchObject({ httpStatus: 404, response: { status: "rejected", error: { code: "request_not_found" } } });
+      expect(table.get("stable_1234")?.coreAnswer?.status).toBe("rejected");
+    } finally { table.close(); await job.stop(); }
+  });
+
+  it("refuses a new answer at maxKeys before terminal retention expiry, permits it after, and keeps uncertain markers", async () => {
+    const core = fictionalCore(actor), table = new IdempotencyTable(file, 1, 150);
+    const job = new CoreAppJob({ daemon: core.client, actor, actions: true, tracked: () => table.trackedCoreRequests(actor) }); await job.discover();
+    const action = new AnswerAction({ job, actor, table });
+    try {
+      expect(await action.handle(coreAnswerRequest("A", "stable_aaaa", actor))).toMatchObject({ response: { status: "completed" } });
+      expect(table.size()).toBe(1); expect(table.trackedCoreRequests(actor)).toEqual(["A"]);
+      // No early eviction: an unexpired terminal marker still counts, so a new answer is refused, nothing sent.
+      const before = core.posts.length;
+      expect(await action.handle(coreAnswerRequest("B", "stable_bbbb", actor))).toMatchObject({ httpStatus: 503, response: { error: { code: "idempotency_table_full" } } });
+      expect(core.posts.length).toBe(before); expect(table.get("stable_aaaa")?.coreAnswer?.status).toBe("completed");
+      await new Promise((r) => setTimeout(r, 200));
+      expect(await action.handle(coreAnswerRequest("B", "stable_bbbb", actor))).toMatchObject({ response: { status: "completed" } });
+      expect(table.get("stable_aaaa")).toBeUndefined(); expect(table.trackedCoreRequests(actor)).toEqual(["B"]);
+      // A later retry of the forgotten key reaches Core, which replays it (or refuses a changed payload).
+      await new Promise((r) => setTimeout(r, 200)); core.resultReads.length = 0; await job.refresh(); await job.refresh(); expect(core.resultReads).toEqual([]);
+      expect(await action.handle(coreAnswerRequest("A", "stable_aaaa", actor))).toMatchObject({ response: { status: "completed", replayed: true } });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(await action.handle(coreAnswerRequest("A", "stable_aaaa", actor, "no"))).toMatchObject({ response: { status: "rejected", error: { code: "answer_id_conflict" } } });
+      expect(table.size()).toBe(1);
+      // An uncertain marker is retained even after the retention time passes: the next answer is refused.
+      await new Promise((r) => setTimeout(r, 200));
+      core.fault(() => "throw");
+      expect(await action.handle(coreAnswerRequest("C", "stable_cccc", actor))).toMatchObject({ response: { status: "accepted" } });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(await action.handle(coreAnswerRequest("D", "stable_dddd", actor))).toMatchObject({ httpStatus: 503, response: { error: { code: "idempotency_table_full" } } });
+      expect(table.get("stable_cccc")?.coreAnswer?.status).toBeUndefined();
+      // Marker content is hashes, request and actor plus a terminal status only.
+      expect(readFileSync(file, "utf8")).not.toMatch(/optionId|expectedRevision|committed|answered|returned/);
+    } finally { table.close(); await job.stop(); }
+  });
+
+  it.each([
+    ["401 credential", () => Response.json({ error: "invalid_credential" }, { status: 401 })],
+    ["403 credential scope", () => Response.json({ error: "actor_not_allowed" }, { status: 403 })],
+    ["404 missing route", () => new Response("Not Found", { status: 404 })],
+  ] as const)("keeps the browser's original answer retryable after a lost gateway reply and %s loss (marker settled or expired), one Core commit", async (_name, lost) => {
+    for (const expire of [false, true]) {
+      rmSync(file, { force: true });
+      const core = fictionalCore(actor), job = new CoreAppJob({ daemon: core.client, actor, actions: true }); await job.discover();
+      const table = new IdempotencyTable(file, 5000, 100), action = new AnswerAction({ job, actor, table });
+      try {
+        const request = coreAnswerRequest("A", "stable_1234", actor);
+        // Core commits and the gateway records the terminal marker, but the browser never receives this response.
+        expect(await action.handle(request)).toMatchObject({ response: { status: "completed" } });
+        expect(table.get("stable_1234")?.coreAnswer?.status).toBe("completed");
+        if (expire) { await new Promise((r) => setTimeout(r, 150)); }
+        core.fault(lost);
+        expect(await action.handle(request)).toMatchObject({ httpStatus: 200, response: { status: "accepted", retrySameRequest: true, result: { answerId: core.posts[0]!.path.split("/").at(-1), retrySameSubmission: true } } });
+        // A different payload under the key is not an exact retry, and is not claimed as one.
+        if (!expire) expect(await action.handle(coreAnswerRequest("A", "stable_1234", actor, "no"))).toMatchObject({ httpStatus: 409, response: { status: "rejected", error: { code: "idempotency_key_reused" } } });
+        core.fault(() => undefined);
+        expect(await action.handle(request)).toMatchObject({ response: { status: "completed", replayed: true } });
+        expect(new Set(core.posts.map((p) => p.path)).size).toBe(1); expect(new Set(core.posts.filter((p) => p.body.includes("\"yes\"")).map((p) => p.body)).size).toBe(1);
+        expect(readFileSync(file, "utf8")).not.toMatch(/optionId|expectedRevision|committed|answered|returned|bearer/i);
+      } finally { table.close(); await job.stop(); }
+    }
+  });
+
+  it("stops reading results for a terminal marker that expired by retention", async () => {
+    const core = fictionalCore(actor), table = new IdempotencyTable(file, 5000, 5);
+    const job = new CoreAppJob({ daemon: core.client, actor, actions: true, tracked: () => table.trackedCoreRequests(actor) }); await job.discover();
+    const action = new AnswerAction({ job, actor, table });
+    try {
+      await action.handle(coreAnswerRequest("A", "stable_aaaa", actor));
+      await job.refresh(); core.resultReads.length = 0; await job.refresh(); expect(core.resultReads).toEqual(["A"]);
+      await new Promise((r) => setTimeout(r, 20));
+      core.resultReads.length = 0; await job.refresh(); await job.refresh();
+      expect(core.resultReads).toEqual([]); expect(job.items()).toEqual([]);
+    } finally { table.close(); await job.stop(); }
+  });
+
+  it("offers actions for healthy requests under partial coverage but never for stale cached ones or without discovery", async () => {
+    const mock = new MockDaemon(); await mock.start(); daemon = mock;
+    const tokenFile = join(dir, "app-token"); writeFileSync(tokenFile, "fictional-app-token", { mode: 0o600 });
+    const person = "alex@external";
+    const ask = (id: string) => ({ requestId: id, asker: "builder@acme-ops", askedPerson: person, actor: { address: person, assurance: "app-attributed" }, state: "pending", decisionRevision: "dr1-original", episodeKey: null, answer: { job: "human-answer", forms: ["option"] }, questions: [{ id: "ship", question: "Ship?", options: [{ id: "yes", label: "Yes" }] }] });
+    mock.coreApp = {
+      capabilities: { contract: "openrig.core-app", version: 1, jobs: [{ id: "human-answer", answerForms: ["option"], actorAssurance: ["app-attributed"], stableSubmissionIds: true, resultRead: true }], app: { id: "fixture-seats", actors: [person] } },
+      snapshot: { version: 1, requests: [ask("healthy"), ask("later-unknown")], sources: [{ source: "queue", state: "available" }] },
+      receipt: { submission: { state: "committed" } }, result: {},
+    };
+    await start({ coreApp: { tokenFile, actor: person, actions: true, idempotencyFile: file } });
+    const card = (id: string) => gw!.gateway.store.items("attention").find((x) => x.id === `core-app:${id}`) as Record<string, any> | undefined;
+    await waitFor(() => card("healthy")?.actions?.length && card("later-unknown")?.actions?.length);
+    // Core now reports partial coverage: the unknown request is omitted, the healthy one is still listed.
+    mock.coreApp.snapshot = { version: 1, requests: [ask("healthy")], sources: [{ source: "queue", state: "partial", detail: "1 request(s) omitted" }] };
+    await gw!.gateway.source.resync();
+    expect(card("healthy")!.actions.length).toBeGreaterThan(0); expect(card("healthy")!["x-openrig.core-app"].coverage).toBe("partial");
+    expect(card("later-unknown")!.actions).toBeUndefined();
+    // Discovery lost: nothing is offered, though the cards remain readable.
+    mock.coreApp.capabilities.version = 2;
+    await gw!.gateway.source.resync();
+    expect(card("healthy")!.actions).toBeUndefined();
+  });
+});
+
+
+// Explicit checkout proof uses that tree's built owners and native SQLite dependency. No daemon boot/providers.
+const coreCheckout = process.env.OPENRIG_CHECKOUT;
+describe.skipIf(!coreCheckout)("actual Core app job through source and gateway", () => {
+  // Any registered person: Core's app actor list, not a human-* naming rule, is the authority.
+  const actor = "alex@external";
+  async function actualCore(receivingAgent = true) {
+    const own = createRequire(resolve(coreCheckout!, "package.json"));
+    const load = (path: string) => import(/* @vite-ignore */ pathToFileURL(resolve(coreCheckout!, "packages/daemon/dist", path)).href);
+    const [migration, migrations, event, queue, accessModule, logModule, writeModule, jobModule, route, outbox, rigsModule, sessionsModule, permissionModule] = await Promise.all([
+      "db/migrate.js", "db/all-migrations.js", "domain/event-bus.js", "domain/queue-repository.js", "domain/core-app-access.js", "domain/mission-control/mission-control-action-log.js", "domain/mission-control/mission-control-write-contract.js", "domain/core-app-job.js", "routes/core-app.js", "domain/outbox-handler.js", "domain/rig-repository.js", "domain/session-registry.js", "domain/runner-permissions.js",
+    ].map(load));
+    const Database = own("better-sqlite3"), { Hono } = own("hono");
+    const db = new Database(join(dir, "actual-core.sqlite")); migration.migrate(db, migrations.ALL_MIGRATIONS);
+    const registry = { ok: true, entities: [{ entityId: "alex", class: "human", displayName: "Fictional operator", address: actor, connectorBindings: [], prefs: { deliveryClass: "A" } }] };
+    const bus = new event.EventBus(db), repo = new queue.QueueRepository(db, bus, { validateRig: () => true, loadHumanRegistry: () => registry, permissionDecider: () => receivingAgent ? { session: "lead@fixture" } : null, transport: { send: async () => ({ ok: true, verified: true, sent: true }) } });
+    repo.attachOutbox(new outbox.OutboxHandler(db));
+    const access = new accessModule.CoreAppAccess(db, repo), log = new logModule.MissionControlActionLog(db);
+    const writes = new writeModule.MissionControlWriteContract({ db, eventBus: bus, queueRepo: repo, actionLog: log });
+    const job = new jobModule.CoreAppJob(access, repo, bus, writes, log);
+    const app = new Hono(), requests: Array<{ path: string; query: string; attribution: boolean; authorization: string | undefined }> = [], posts: Array<{ path: string; body: unknown }> = [];
+    let loseReceipt = false;
+    app.use("*", async (c: any, next: () => Promise<void>) => {
+      requests.push({ path: c.req.path, query: new URL(c.req.url).search, attribution: !!c.req.header("x-openrig-session"), authorization: c.req.header("authorization") });
+      await next();
+      if (c.req.method === "POST" && c.req.path.includes("/answers/")) {
+        posts.push({ path: c.req.path, body: await c.req.json() });
+        if (loseReceipt && c.res.status === 200) { loseReceipt = false; c.res = new Response('{"submission":', { status: 200, headers: { "content-type": "application/json" } }); }
+      }
+    });
+    app.route("/api/apps", route.coreAppRoutes({ access, operatorToken: "fictional-operator", job }));
+    // Unrelated inventory comes from the existing fictional daemon, never from an installed Core.
+    app.all("*", (c: any) => fetch(daemon.url + new URL(c.req.url).pathname + new URL(c.req.url).search, { signal: c.req.raw.signal }));
+    const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }) as HttpServer;
+    await new Promise<void>((done, fail) => { server.once("listening", done); server.once("error", fail); });
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const provision = await fetch(url + "/api/apps/v1/credentials", { method: "POST", headers: { authorization: "Bearer fictional-operator", "content-type": "application/json" }, body: JSON.stringify({ appId: "seats-fixture", actors: [actor], job: "human-answer", attribution: "app-attributed" }) });
+    expect(provision.status).toBe(201);
+    const credential = await provision.json() as { token: string };
+    const appTokenFile = join(dir, "actual-app-token"); writeFileSync(appTokenFile, credential.token, { mode: 0o600 });
+    const config = { daemonUrl: url, act: { send: true, sender: SENDER, idempotencyFile: file }, coreApp: { tokenFile: appTokenFile, actor, actions: true, idempotencyFile: join(dir, "actual-answer-keys") } };
+    const start = async () => { gw = await startGateway(daemon, {}, config); };
+    const item = (id: string) => gw!.gateway.store.items("attention").find(i => i.id === `core-app:${id}`) as Record<string, any> | undefined;
+    const answer = async (id: string, key: string, option: string) => {
+      const card = await waitFor(() => item(id)?.actions?.length && item(id));
+      const declaration = card.actions.find((a: any) => a.id.startsWith("answer-option:"));
+      const input = Object.fromEntries(Object.entries(declaration.input.properties).filter(([, v]) => Object.hasOwn(v as object, "const")).map(([k, v]) => [k, (v as any).const]));
+      return { kind: "attention", id: card.id, action: declaration.id, input: { ...input, optionId: option }, idempotencyKey: key };
+    };
+    const permission = async () => {
+      const rigs = new rigsModule.RigRepository(db), rig = rigs.createRig("fixture"), node = rigs.addNode(rig.id, "runner", { runtime: "synth" });
+      const sessions = new sessionsModule.SessionRegistry(db); sessions.registerSession(node.id, "runner@fixture");
+      const generation = sessions.currentOccupantTenure(node.id).generationUuid;
+      const permissions = new permissionModule.RunnerPermissions({ db, queueRepo: repo, eventBus: bus, humanRegistry: () => registry, ownerOf: () => actor, currentGeneration: (id: string) => sessions.currentOccupantTenure(id)?.generationUuid ?? null });
+      const ask = await permissions.submit({ nodeId: node.id, sessionName: "runner@fixture", generation }, { nativeRef: "fictional-session", turnId: "fictional-turn", requestId: "fictional-permission", toolCall: { title: "Write fictional report", kind: "edit" }, options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "reject", name: "Reject once", kind: "reject_once" }] });
+      expect(ask.ok).toBe(true); return { permissions, askId: ask.askId };
+    };
+    const stop = async () => { await gw?.stop(); gw = undefined; server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); await waitFor(() => bus.subscriberCount === 0, 4000, "actual Core app SSE subscription cleanup"); db.close(); };
+    // A pure tenure read that cannot be established: absent (null) or failing. Restored by the returned function.
+    const tenureFault = (mode: "missing" | "failed") => {
+      const proto = sessionsModule.SessionRegistry.prototype, original = proto.currentOccupantTenure;
+      proto.currentOccupantTenure = function () { if (mode === "failed") throw new Error("fixture tenure read unavailable"); return null; };
+      return () => { proto.currentOccupantTenure = original; };
+    };
+    return { db, bus, repo, log, requests, posts, config, tenureFault, start, item, answer, permission, stop, url, token: credential.token, loseReceipt: () => { loseReceipt = true; } };
+  }
+
+  it("discovers, answers, recovers a lost receipt after gateway restart, and follows actual event/poll results", { timeout: 45000 }, async () => {
+    const f = await actualCore();
+    try {
+      const ask = await f.repo.create({ sourceSession: "lead-planner@acme-ops", destinationSession: actor, body: "Fictional report decision", humanIntent: "decision", humanQuestions: [{ id: "ship", question: "Ship the report?", options: [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }] }], nudge: false });
+      const work = await f.repo.create({ sourceSession: "builder@fixture", destinationSession: "builder@fixture", body: "Prepare fictional report", nudge: false });
+      f.repo.claim({ qitemId: work.qitemId, destinationSession: "builder@fixture" }); f.repo.update({ qitemId: work.qitemId, actorSession: "builder@fixture", state: "blocked", blockedOn: ask.qitemId });
+      await f.start();
+      const original = await f.answer(ask.qitemId, KEY("actual-core"), "yes");
+      const caps = await json(await fetch(gw!.url + "/capabilities", { headers: auth }));
+      expect(caps.features["x-openrig.core-app.human-answer"]).toBe(true); expect(caps.protocol.version).toBe("1.0");
+      f.loseReceipt();
+      expect(await json(await act(original))).toMatchObject({ status: "accepted", retrySameRequest: true });
+      expect(f.repo.getHumanAnswer(ask.qitemId, actor)?.sourceSession).toBe(actor);
+      await gw!.stop(); await f.start();
+      const initialRetry = await json(await act(original));
+      expect(["accepted", "completed"], JSON.stringify(initialRetry)).toContain(initialRetry.status);
+      if (initialRetry.status === "accepted") expect(initialRetry.retrySameRequest).toBe(true);
+      await waitFor(() => gw!.gateway.source.status().seatsSynced);
+      const replay = await json(await act(original));
+      expect(replay, JSON.stringify(replay)).toMatchObject({ status: "completed", replayed: true, result: { actor: { address: actor, assurance: "app-attributed" }, submission: { state: "committed", outcome: "answered" } } });
+      expect(f.posts.length).toBeGreaterThanOrEqual(2); for (const posted of f.posts) expect(posted).toEqual(f.posts[0]);
+      expect(f.log.countAll()).toBe(1); expect(f.db.prepare("SELECT COUNT(*) n FROM queue_items WHERE reply_to = ?").get(ask.qitemId)).toEqual({ n: 1 });
+      for (const link of Object.values(replay.result.links) as string[]) expect(link).toContain(`actor=${encodeURIComponent(actor)}`);
+      const request = await fetch(f.url + replay.result.links.request, { headers: { authorization: `Bearer ${f.token}` } });
+      expect(request.status).toBe(200); expect(await request.json()).toMatchObject({ requestId: ask.qitemId, actor: { address: actor } });
+      expect((await send(KEY("still-unsafe"), "yes", "node-a2")).status).toBe(409); expect(daemon.posts).toHaveLength(0);
+      await waitFor(() => f.requests.some(r => r.path === "/api/apps/v1/events"));
+      await new Promise(done => setTimeout(done, 200));
+      f.db.prepare("UPDATE queue_items SET blocked_on = NULL, state = 'in-progress' WHERE qitem_id = ?").run(work.qitemId);
+      const result = await f.repo.create({ sourceSession: "builder@fixture", destinationSession: actor, body: "Actual recorded result: fictional report delivered", inboundReplyTo: work.qitemId, humanIntent: "update", nudge: false });
+      f.repo.update({ qitemId: work.qitemId, actorSession: "builder@fixture", state: "done", closureReason: "no-follow-on", evidenceRef: "artifact:fictional-report" });
+      const current = await waitFor(() => f.item(ask.qitemId)?.["x-openrig.core-app"]?.result?.work?.records?.some((r: any) => r.qitemId === result.qitemId) && f.item(ask.qitemId));
+      expect(current["x-openrig.core-app"].result).toMatchObject({ answerReturn: { status: "returned" }, permissionDecision: { status: "not-applicable", nativeEffect: "unknown" }, work: { completion: { status: "unknown" } } });
+      expect(current["x-openrig.core-app"].result.work.edges).toContainEqual(expect.objectContaining({ from: ask.qitemId, to: work.qitemId, relation: "blocked-on", captured: true }));
+      await new Promise(done => setTimeout(done, 200));
+      const seq = f.bus.maxSeq(); f.db.prepare("UPDATE queue_items SET body = ? WHERE qitem_id = ?").run("Polled actual result without an event", result.qitemId);
+      await waitFor(() => JSON.stringify(f.item(ask.qitemId)).includes("Polled actual result without an event"), 8000, "mandatory poll of an eventless Core result change"); expect(f.bus.maxSeq()).toBe(seq);
+      expect(f.requests.filter(r => r.path === "/api/apps/v1/needs-me" || r.path.endsWith("/result")).every(r => r.query.includes(`actor=${encodeURIComponent(actor)}`))).toBe(true);
+      expect(f.requests.filter(r => r.path === "/api/apps/v1/events").every(r => r.query === "" && !r.attribution)).toBe(true);
+      expect((JSON.stringify(current) + JSON.stringify(caps)).includes(f.token)).toBe(false);
+    } finally { await f.stop(); }
+  });
+
+  it("keeps the human answer distinct from receiving-agent permission and unknown native effect", { timeout: 30000 }, async () => {
+    const f = await actualCore();
+    try {
+      const p = await f.permission(); await f.start();
+      expect(await json(await act(await f.answer(p.askId, KEY("actual-permission"), "allow")))).toMatchObject({ status: "completed" });
+      const waiting = await waitFor(() => f.item(p.askId)?.["x-openrig.core-app"]?.result?.permissionDecision?.status === "awaiting-agent" && f.item(p.askId));
+      expect(waiting["x-openrig.core-app"].result.answerReturn).toMatchObject({ status: "kept-for-agent", replyQitemId: null });
+      expect(waiting["x-openrig.core-app"].result.permissionDecision.nativeEffect).toBe("unknown");
+      expect(p.permissions.decide(p.askId, "allow", "lead@fixture", "Fictional receiving-agent decision")).toMatchObject({ state: "answered", optionId: "allow" });
+      await waitFor(() => f.item(p.askId)?.["x-openrig.core-app"]?.result?.permissionDecision?.status === "decided");
+      expect(f.item(p.askId)!["x-openrig.core-app"].result.permissionDecision).toMatchObject({ status: "decided", option: "allow", decider: "lead@fixture", nativeEffect: "unknown" });
+      expect(daemon.posts).toHaveLength(0);
+    } finally { await f.stop(); }
+  });
+
+  it.each(["missing", "failed"] as const)("saves an answer under %s authority and replays the immutable kept-owner notice", { timeout: 30000 }, async (mode) => {
+    const f = await actualCore(false);
+    try {
+      const p = await f.permission(); await f.start();
+      const original = await f.answer(p.askId, KEY(`tenure-${mode}`), "allow");
+      const logged = f.log.countAll();
+      const restore = f.tenureFault(mode);
+      let receipt: Record<string, any>;
+      try {
+        await gw!.gateway.source.resync();
+        const card = f.item(p.askId)!;
+        expect(card.actions.length).toBeGreaterThan(0);
+        expect(card["x-openrig.core-app"]).toMatchObject({ occupantAuthority: "unknown" });
+        expect(card.summary).toContain("The asking agent's seat can't be confirmed current");
+        receipt = await json(await act(original));
+        expect(receipt).toMatchObject({ status: "completed", result: { submission: { state: "committed", outcome: "answered", message: expect.any(String) } } });
+        expect(f.repo.getById(p.askId)?.humanAnswers).toEqual({ permission: "allow" });
+        expect(receipt.result.actor).toMatchObject({ address: actor, assurance: "app-attributed" });
+        expect(receipt.result.submission.message).toContain("Your answer is kept");
+        expect(receipt.result.submission.message).toContain("nothing was permitted or refused");
+        expect(f.log.countAll()).toBe(logged + 1);
+        const result = await waitFor(() => f.item(p.askId)?.["x-openrig.core-app"]?.result?.permissionDecision?.reason === "occupant_unavailable" && f.item(p.askId));
+        expect(result["x-openrig.core-app"].result.permissionDecision).toMatchObject({ status: "unknown", nativeEffect: "unknown" });
+      } finally { restore(); }
+      await gw!.stop(); await f.start();
+      await waitFor(() => gw!.gateway.source.status().seatsSynced);
+      const replay = await json(await act(original));
+      expect(replay).toMatchObject({ status: "completed", replayed: true });
+      expect(replay.result.submission).toEqual(receipt!.result.submission);
+      expect(new Set(f.posts.map(x => x.path)).size).toBe(1);
+      expect(f.log.countAll()).toBe(logged + 1);
+      expect(daemon.posts).toHaveLength(0);
+    } finally { await f.stop(); }
+  });
+
+  it("keeps healthy and unknown-authority asks answerable together", { timeout: 30000 }, async () => {
+    const f = await actualCore();
+    try {
+      const p = await f.permission();
+      const ordinary = await f.repo.create({ sourceSession: "lead-planner@acme-ops", destinationSession: actor, body: "Fictional ordinary decision", humanIntent: "decision", humanQuestions: [{ id: "ship", question: "Ship it?", options: [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }] }], nudge: false });
+      await f.start();
+      await waitFor(() => f.item(p.askId)?.actions?.length && f.item(ordinary.qitemId)?.actions?.length);
+      const restore = f.tenureFault("missing");
+      try {
+        await gw!.gateway.source.resync();
+        expect(f.item(ordinary.qitemId)!.actions.length).toBeGreaterThan(0);
+        expect(f.item(p.askId)!.actions.length).toBeGreaterThan(0);
+        expect(f.item(p.askId)!["x-openrig.core-app"].occupantAuthority).toBe("unknown");
+        expect(await json(await act(await f.answer(ordinary.qitemId, KEY("healthy-partial"), "yes")))).toMatchObject({ status: "completed" });
+      } finally { restore(); }
+    } finally { await f.stop(); }
+  });
+
+  it("keeps the issued app token out of every retained evidence surface while observing real credential use", { timeout: 30000 }, async () => {
+    const f = await actualCore();
+    try {
+      const ask = await f.repo.create({ sourceSession: "lead-planner@acme-ops", destinationSession: actor, body: "Fictional token evidence", humanIntent: "decision", humanQuestions: [{ id: "ship", question: "Ship it?", options: [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }] }], nudge: false });
+      await f.start();
+      const done = await json(await act(await f.answer(ask.qitemId, KEY("token-evidence"), "yes")));
+      expect(done.status).toBe("completed");
+      const caps = await (await fetch(gw!.url + "/capabilities", { headers: auth })).text();
+      const used = f.requests.filter((r) => r.path.startsWith("/api/apps/v1/") && r.path !== "/api/apps/v1/credentials");
+      expect(used.length).toBeGreaterThan(0); expect(used.every((r) => r.authorization === `Bearer ${f.token}`)).toBe(true);
+      expect(f.token.length).toBeGreaterThan(16);
+      const browser = JSON.stringify([gw!.gateway.store.items("attention"), done]);
+      for (const [name, evidence] of Object.entries({ browser, caps, answers: readFileSync(f.config.coreApp.idempotencyFile, "utf8"), sends: existsSync(file) ? readFileSync(file, "utf8") : "", log: gw!.logs.join("\n") })) expect(evidence.includes(f.token), name).toBe(false);
+      expect(readFileSync(f.config.coreApp.idempotencyFile, "utf8").length).toBeGreaterThan(0);
+    } finally { await f.stop(); }
   });
 });

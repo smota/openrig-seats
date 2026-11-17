@@ -16,6 +16,8 @@ export interface SSEMessage {
  * a leading BOM, ids that persist across messages, and the rule that an event without data is dropped.
  */
 export interface ParseSSEOptions {
+  /** Cancel the owned reader even after fetch has returned its response headers. */
+  signal?: AbortSignal;
   /** Called as soon as a valid `retry:` field is read, including in blocks that carry no data. */
   onRetry?: (ms: number) => void;
   /** Maximum UTF-8 bytes per line, excluding its terminator. Unlimited when omitted. */
@@ -32,6 +34,9 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>, options: Parse
   let lineBytes = 0;
   let eventBytes = 0;
   const reader = body.getReader();
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  if (options.signal?.aborted) cancel();
+  else options.signal?.addEventListener("abort", cancel, { once: true });
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let first = true;
@@ -77,6 +82,7 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>, options: Parse
 
   try {
     for (;;) {
+      if (options.signal?.aborted) return;
       const { done, value } = await reader.read();
       if (done) break;
       // Count raw bytes before decoding or retaining any unterminated text.
@@ -103,11 +109,13 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>, options: Parse
         const line = buffer.slice(0, m.index);
         buffer = buffer.slice(m.index + m[0].length);
         const msg = processLine(line);
+        if (options.signal?.aborted) return;
         if (msg) yield msg;
       }
     }
     // A stream that ends mid-event never dispatches it (as EventSource).
   } finally {
+    options.signal?.removeEventListener("abort", cancel);
     // Ending early (the consumer broke out, or an error): close the underlying connection.
     void reader.cancel().catch(() => {});
     reader.releaseLock?.();

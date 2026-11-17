@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +18,7 @@ const reqs: ActRequest[] = [
   { idempotencyKey: "key-12345678", kind: "attention", id: "a1", action: "x", input: nested },
 ];
 const resps: ActResponse[] = [
+  { idempotencyKey: "key-12345678", status: "accepted", replayed: false, retrySameRequest: true },
   { idempotencyKey: "key-12345678", status: "completed", replayed: false, result: [1, { ok: true }] },
   { idempotencyKey: "key-12345678", status: "completed", replayed: false, result: "done" },
   { idempotencyKey: "key-12345678", status: "completed", replayed: true, result: null },
@@ -40,4 +43,14 @@ describe("wire types", () => {
   it("typechecks (tsc) with the expectations above", () => {
     execFileSync("npx", ["tsc", "--noEmit", "-p", "tsconfig.check.json"], { cwd: root, encoding: "utf8" });
   }, 60_000);
+});
+
+
+it("validates neutral optional retrySameRequest while retaining old response compatibility", () => {
+  const schema = JSON.parse(readFileSync(resolve(root, "schemas/act-response.v1.schema.json"), "utf8"));
+  const validate = new Ajv2020({ strict: false }).compile(schema);
+  const response = { idempotencyKey: "key-12345678", status: "accepted", replayed: false };
+  expect(validate(response)).toBe(true);
+  expect(validate({ ...response, retrySameRequest: true })).toBe(true);
+  expect(validate({ ...response, retrySameRequest: "yes" })).toBe(false);
 });

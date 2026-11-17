@@ -1,5 +1,5 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { readSecretFile } from "@openrig-seats/seat-source-openrig";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -89,4 +89,21 @@ describe("terminal config", () => {
     for (const terminal of [[], { enabled: "yes" }, { enabled: true }, { principal: "bad\nheader" }, { maxViewers: 0 }, { maxViewers: 1025 }, { maxFrameBytes: 0 }, { maxFrameBytes: 1048577 }]) expect(() => parseConfig({ tokenFile: "t", terminal })).toThrow(/terminal/);
     expect(parseConfig({ tokenFile: "t", terminal: { enabled: true, principal: "viewer@acme", maxViewers: 2, maxFrameBytes: 1024 } }).terminal).toMatchObject({ enabled: true, principal: "viewer@acme" });
   });
+});
+
+
+it("Core app answers require separate explicit credentials, canonical actor and opt-in durable actions", () => {
+  const base = { tokenFile: "gateway", coreApp: { tokenFile: "app", actor: "human-lee@external" } };
+  expect(parseConfig(base).coreApp).toMatchObject({ actions: false });
+  expect(() => parseConfig({ ...base, coreApp: { ...base.coreApp, actions: true } })).toThrow(/idempotencyFile/);
+  // Any registered person's address is valid syntax (not only human-*); Core's app actor list is the authority.
+  expect(parseConfig({ ...base, coreApp: { ...base.coreApp, actor: "alex@external" } }).coreApp).toMatchObject({ actor: "alex@external" });
+  for (const bad of ["alex", "alex@", "@external", "alex lee@external", "-alex@external"]) expect(() => parseConfig({ ...base, coreApp: { ...base.coreApp, actor: bad } })).toThrow(/name@domain/);
+  expect(() => parseConfig({ ...base, coreApp: { ...base.coreApp, actions: "yes" } })).toThrow(/boolean/);
+  expect(() => parseConfig({ ...base, act: { send: true, sender: "cockpit@acme", idempotencyFile: "same" }, coreApp: { ...base.coreApp, actions: true, idempotencyFile: "same" } })).toThrow(/separate/);
+  // `~/x` and its expanded form are the same file, in either order; distinct files remain accepted.
+  const withFiles = (sends: string, answers: string) => ({ ...base, act: { send: true, sender: "cockpit@acme", idempotencyFile: sends }, coreApp: { ...base.coreApp, actions: true, idempotencyFile: answers } });
+  expect(() => parseConfig(withFiles("~/seat-ids.json", `${homedir()}/seat-ids.json`))).toThrow(/separate/);
+  expect(() => parseConfig(withFiles(`${homedir()}/seat-ids.json`, "~/seat-ids.json"))).toThrow(/separate/);
+  expect(parseConfig(withFiles("~/seat-ids.json", "~/seat-answers.json")).coreApp?.idempotencyFile).toBe(`${homedir()}/seat-answers.json`);
 });

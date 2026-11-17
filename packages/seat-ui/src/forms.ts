@@ -119,10 +119,33 @@ function control(schema: Record<string, unknown>, name: string, required: boolea
   return { node: input, read: () => input.type === "checkbox" ? input.checked : input.type === "number" ? (input.value === "" ? undefined : Number(input.value)) : input.value };
 }
 
+/** Only Core human-answer forms keep their exact payload in the browser until a terminal reply; ordinary actions
+ *  (such as send) never touch browser storage. */
+export const isCoreAnswerForm = (kind: string, id: string, action: string): boolean =>
+  kind === "attention" && id.startsWith("core-app:") && /^answer-(option|typed)(:[a-f0-9]{24})?$/.test(action);
+
+/** Pending Core answers remain recoverable even when snapshots stop declaring their action/item. */
+export function savedSubmissions(): ActInput[] {
+  const pending: ActInput[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)!;
+      try {
+        const tuple: unknown = JSON.parse(key);
+        if (!Array.isArray(tuple) || tuple.length !== 4 || tuple[0] !== "seat-recoverable-action-v1" || !isCoreAnswerForm(String(tuple[1]), String(tuple[2]), String(tuple[3]))) continue;
+        const r = JSON.parse(localStorage.getItem(key) ?? "null") as ActInput | null;
+        if (r && typeof r.kind === "string" && r.kind === tuple[1] && typeof r.id === "string" && r.id === tuple[2] && typeof r.action === "string" && r.action === tuple[3] && typeof r.idempotencyKey === "string" && r.idempotencyKey.length >= 8 && r.idempotencyKey.length <= 128) pending.push(r);
+      } catch { /* Ignore foreign or corrupt storage; never invent a replacement request. */ }
+    }
+  } catch { /* Unavailable storage is surfaced when an action is submitted. */ }
+  return pending;
+}
+
 export function createActionForm(
   kind: string, id: string, action: Pick<Action, "id" | "label" | "input" | "danger">,
   submit: (input: ActInput) => Promise<unknown>, confirm: (message: string) => boolean = (message) => window.confirm(message),
   validators: ActionFormValidators = defaultValidators,
+  recoveryOnly = false,
 ): HTMLFormElement {
   const form = element("form", undefined, "action-form");
   form.setAttribute("aria-label", action.label); form.noValidate = true;
@@ -161,25 +184,50 @@ export function createActionForm(
   if (action.input === false) result.textContent = "This action accepts no valid input and cannot be submitted.";
   if (compileError) result.textContent = compileError;
   form.append(button, result);
+  const storageKey = JSON.stringify(["seat-recoverable-action-v1", kind, id, action.id]);
+  const durable = isCoreAnswerForm(kind, id, action.id);
+  let retry: ActInput | undefined;
+  if (durable) try {
+    const saved: unknown = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+    if (saved && typeof saved === "object") {
+      const r = saved as ActInput;
+      if (r.kind === kind && r.id === id && r.action === action.id && typeof r.idempotencyKey === "string") retry = r;
+    }
+  } catch { /* A new submission still has to persist successfully below. */ }
+  const showRetry = (response?: unknown) => { button.textContent = "Retry same submission"; result.textContent = `Retry the same submission before starting another action. Original input: ${JSON.stringify(retry?.input)}${response === undefined ? "" : `\n${JSON.stringify(response, null, 2)}`}`; };
+  if (retry) showRetry();
+  if (recoveryOnly) button.disabled = !retry;
   let pending = false;
   form.addEventListener("submit", async (event) => {
-    event.preventDefault(); if (pending || button.disabled) return;
+    event.preventDefault(); if (pending || button.disabled || (recoveryOnly && !retry)) return;
     let value: unknown;
     try {
-      if (action.input !== undefined) value = jsonMode ? JSON.parse(json.value) : nativeControl!.read();
-      if (validate && !validate(value)) {
+      if (!retry && action.input !== undefined) value = jsonMode ? JSON.parse(json.value) : nativeControl!.read();
+      if (!retry && validate && !validate(value)) {
         result.textContent = `Invalid input: ${validators.errorsText(validate)}`; return;
       }
     } catch { result.textContent = "Invalid input: enter valid JSON."; return; }
     if (action.danger && !confirm(`Run “${action.label}” on ${id}?`)) return;
     let key: string;
-    try { key = idempotencyKey(); }
+    try { key = retry?.idempotencyKey ?? idempotencyKey(); }
     catch { result.textContent = "Unable to generate a secure submission key. Please try again."; return; }
     pending = true; button.disabled = true; result.textContent = "Submitting…";
-    const input: ActInput = { kind, id, action: action.id, ...(action.input !== undefined ? { input: value as Json } : {}), idempotencyKey: key };
-    try { result.textContent = JSON.stringify(await submit(input), null, 2); }
-    catch { result.textContent = "Submission failed. Check the item before submitting again."; }
-    finally { pending = false; button.disabled = false; }
+    const input: ActInput = retry ?? { kind, id, action: action.id, ...(action.input !== undefined ? { input: value as Json } : {}), idempotencyKey: key };
+    if (durable) try { localStorage.setItem(storageKey, JSON.stringify(input)); retry = input; }
+    catch { result.textContent = "Unable to save this action key. Submission is unavailable until browser storage is writable."; pending = false; button.disabled = false; return; }
+    try {
+      const response = await submit(input);
+      result.textContent = JSON.stringify(response, null, 2);
+      const r = record(response);
+      if (durable) {
+        if (r.retrySameRequest === true && !["completed", "rejected", "failed"].includes(String(r.status))) showRetry(response);
+        else { localStorage.removeItem(storageKey); retry = undefined; button.textContent = action.label; }
+      }
+    }
+    catch {
+      if (durable) showRetry(); else result.textContent = "Submission failed. Check the item before submitting again.";
+    }
+    finally { pending = false; button.disabled = recoveryOnly && !retry; }
   });
   return form;
 }

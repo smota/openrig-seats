@@ -53,7 +53,7 @@ export interface DaemonEvent {
   event: { type?: string; rigId?: string; nodeId?: string; [k: string]: unknown };
 }
 
-/** Thin GET-only client for the daemon. */
+/** Thin loopback HTTP client; write callers choose their own explicit authority and recovery policy. */
 export class DaemonClient {
   private readonly base: string;
   private readonly f: typeof fetch;
@@ -113,6 +113,15 @@ export class DaemonClient {
     return { status: res.status, body: parsed };
   }
 
+  /** App events are invalidation-only. Opaque cursors are not legacy integer sequences. */
+  async *appInvalidations(signal: AbortSignal): AsyncGenerator<void> {
+    const res = await this.f(this.base + ROUTES.appEvents, { method: "GET", redirect: "error", headers: this.headers({ accept: "text/event-stream" }), signal });
+    if (!res.ok || !res.body) { await res.body?.cancel().catch(() => {}); throw new DaemonError("app events unavailable", res.status); }
+    // The connection itself invalidates cached reads, even if replay has no data.
+    yield;
+    for await (const _ of parseSSE(res.body, { maxLineBytes: 65536, maxEventBytes: 65536, signal })) yield;
+  }
+
   /** Status of a GET without parsing: used by feature probes. */
   async status(path: string, signal?: AbortSignal): Promise<number> {
     const timeout = AbortSignal.timeout(this.timeoutMs);
@@ -142,7 +151,7 @@ export class DaemonClient {
       throw new DaemonError(`events stream refused: HTTP ${res.status}`, res.status);
     }
     opts.onOpen?.();
-    for await (const msg of parseSSE(res.body, opts.limits)) {
+    for await (const msg of parseSSE(res.body, { ...opts.limits, signal: opts.signal ?? opts.limits?.signal })) {
       let parsed: unknown;
       try {
         parsed = JSON.parse(msg.data);

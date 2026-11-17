@@ -16,6 +16,7 @@ const ROUTE_FILES = {
   senderIdentity: `${SRC}/routes/require-sender-identity.ts`,
   config: `${SRC}/routes/config.ts`,
   terminal: `${SRC}/routes/terminal-ws.ts`,
+  coreApp: `${SRC}/routes/core-app.ts`,
 } as const;
 
 /**
@@ -114,7 +115,23 @@ export interface TerminalContract {
   uiSetting: boolean;
 }
 
+export interface CoreAppContract {
+  contract: string | null;
+  version: number | null;
+  jobIds: string[];
+  answerForms: string[];
+  actorAssurance: string[];
+  stableSubmissionIds: boolean;
+  resultRead: boolean;
+  independentHumanAuthentication: boolean | null;
+  events: string | null;
+  pollAfterMs: number | null;
+  mounted: boolean;
+}
+
 export interface OpenRigSurfaces {
+  /** Optional facade discovery; older Core can omit it while legacy surfaces remain usable. */
+  coreApp?: CoreAppContract;
   /** Terminal input discriminants, UI gating, and config response shape read by the gateway. */
   terminal?: TerminalContract;
   /** Daemon mounts found in server.ts, as `app.route` / `app.get` prefixes. */
@@ -388,16 +405,51 @@ export function extractTerminalContract(terminalSource: string, serverSource: st
   return { frameTypes: sorted(frameTypes), scrollFields: sorted(scrollFields), uiGate, configResolveOne, configFields, uiSetting: hasToken(settingsSource, "ui.enabled") };
 }
 
+/** Read literal discovery values from the actual capability handler, never comments or internal versions. */
+export function extractCoreAppContract(source: string, serverSource: string): CoreAppContract {
+  const literal = (n: ts.Node): unknown => {
+    if (ts.isStringLiteral(n)) return n.text;
+    if (ts.isNumericLiteral(n)) return Number(n.text);
+    if (n.kind === ts.SyntaxKind.TrueKeyword) return true;
+    if (n.kind === ts.SyntaxKind.FalseKeyword) return false;
+    if (ts.isArrayLiteralExpression(n)) return n.elements.map(literal);
+    if (ts.isObjectLiteralExpression(n)) return Object.fromEntries(n.properties.filter(ts.isPropertyAssignment).map(p => [p.name.getText().replace(/^["']|["']$/g, ""), literal(p.initializer)]));
+    return undefined;
+  };
+  let discovery: Record<string, unknown> = {};
+  walk(parse(source), n => {
+    if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression) || n.expression.name.text !== "get" || stringArg(n) !== "/v1/capabilities") return;
+    for (const handler of n.arguments.slice(1)) walk(handler, child => {
+      if (ts.isCallExpression(child) && ts.isPropertyAccessExpression(child.expression) && child.expression.name.text === "json" && child.arguments[0] && ts.isObjectLiteralExpression(child.arguments[0])) discovery = literal(child.arguments[0]) as Record<string, unknown>;
+    });
+  });
+  const jobs = Array.isArray(discovery.jobs) ? discovery.jobs as Array<Record<string, unknown>> : [];
+  const job = jobs.find(j => j.id === "human-answer") ?? {}, refresh = discovery.refresh as Record<string, unknown> | undefined;
+  const strings = (v: unknown) => sorted(Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : []);
+  return { contract: typeof discovery.contract === "string" ? discovery.contract : null, version: typeof discovery.version === "number" ? discovery.version : null,
+    jobIds: strings(jobs.map(j => j.id)), answerForms: strings(job.answerForms), actorAssurance: strings(job.actorAssurance), stableSubmissionIds: job.stableSubmissionIds === true,
+    resultRead: job.resultRead === true, independentHumanAuthentication: typeof job.independentHumanAuthentication === "boolean" ? job.independentHumanAuthentication : null,
+    events: typeof refresh?.events === "string" ? refresh.events : null, pollAfterMs: typeof refresh?.pollAfterMs === "number" ? refresh.pollAfterMs : null,
+    mounted: extractMounts(serverSource).includes("/api/apps") };
+}
+
 export function extractSurfaces(root: string, read: ReadSource = (rel) => readFileSync(join(root, rel), "utf8")): OpenRigSurfaces {
   const routes: Record<string, string[]> = {};
   const tokens: Record<string, string[]> = {};
+  let coreApp: CoreAppContract | undefined;
   for (const [key, rel] of Object.entries(ROUTE_FILES)) {
-    const source = read(rel);
+    let source: string;
+    try { source = read(rel); } catch (error) {
+      if (key === "coreApp" && (error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (key === "coreApp") coreApp = extractCoreAppContract(source, read(`${SRC}/server.ts`));
     routes[key] = extractRoutes(source);
     tokens[key] = REQUIRED_TOKENS.filter((t) => t.file === key && hasToken(source, t.token)).map((t) => t.token).sort();
   }
   const sendResult = extractSendResult(read(`${SRC}/domain/session-transport.ts`));
   return {
+    ...(coreApp ? { coreApp } : {}),
     terminal: extractTerminalContract(read(ROUTE_FILES.terminal), read(`${SRC}/server.ts`), read(ROUTE_FILES.config), read(`${SRC}/domain/user-settings/settings-store.ts`)),
     mounts: extractMounts(read(`${SRC}/server.ts`)).filter((m) => REQUIRED_MOUNTS.includes(m)),
     routes,
@@ -447,6 +499,12 @@ export function buildSnapshot(root: string, read?: ReadSource): Snapshot {
 export function diffRemovals(snapshot: Snapshot, current: OpenRigSurfaces): string[] {
   const problems: string[] = [];
   const s = snapshot.surfaces;
+  if (s.coreApp && current.coreApp) {
+    for (const key of ["contract", "version", "stableSubmissionIds", "resultRead", "independentHumanAuthentication", "events", "pollAfterMs", "mounted"] as const) {
+      if (s.coreApp[key] !== current.coreApp[key]) problems.push(`core app ${key} changed: ${s.coreApp[key]} -> ${current.coreApp[key]}`);
+    }
+    for (const key of ["jobIds", "answerForms", "actorAssurance"] as const) for (const value of s.coreApp[key]) if (!current.coreApp[key].includes(value)) problems.push(`core app ${key} removed: ${value}`);
+  }
   if (s.terminal) {
     for (const f of s.terminal.frameTypes) if (!current.terminal?.frameTypes.includes(f)) problems.push(`terminal frame type removed: ${f}`);
     for (const f of s.terminal.scrollFields) if (!current.terminal?.scrollFields.includes(f)) problems.push(`terminal scroll field removed: ${f}`);
@@ -457,6 +515,7 @@ export function diffRemovals(snapshot: Snapshot, current: OpenRigSurfaces): stri
   }
   for (const m of s.mounts) if (!current.mounts.includes(m)) problems.push(`mount removed: ${m}`);
   for (const [file, list] of Object.entries(s.routes)) {
+    if (file === "coreApp" && !current.coreApp) continue; // job unavailable on older Core; legacy contract still checked
     for (const r of list) if (!(current.routes[file] ?? []).includes(r)) problems.push(`route removed in ${file}: ${r}`);
   }
   for (const [file, list] of Object.entries(s.tokens)) {

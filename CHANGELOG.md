@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Repin conformance to merged Core PR #3426 (`d2a1597d9055cd6471d7d9d15ba72d133da885e7`); keep unknown-authority questions answerable, display authority details and 503 persistence facts, and verify immutable kept-answer receipts and same-ID retries with isolated fixtures.
+
 - Build shared package dependencies before consumers so a clean clone builds in the required order.
 
 - Add a fixture-backed gateway and seat-ui example, checked by the existing test runner.

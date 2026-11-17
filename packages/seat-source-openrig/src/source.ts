@@ -1,3 +1,4 @@
+import type { CoreAppJob } from "./core-app.js";
 import { DaemonClient, DaemonError, type DaemonEvent } from "./daemon.js";
 import { isoOrUndefined, mapAttention, mapEvent, mapRig, mapSeat, mapWork, WORK_ACTIVE, type EventRecord } from "./map.js";
 import { QUEUE_PAGE, ROUTES } from "./routes.js";
@@ -5,6 +6,7 @@ import type { Change, ExtensionKind, Features, Json, SourceKind } from "./types.
 
 export interface SourceOptions {
   daemon: DaemonClient;
+  coreApp?: CoreAppJob;
   onChange: (change: Change) => void;
   hostId?: string;
   hostName?: string;
@@ -170,11 +172,13 @@ export class OpenRigSource {
   start(): void {
     if (this.running) return;
     this.ctl = new AbortController();
+    this.opts.coreApp?.start(() => this.publish());
     this.running = this.loop();
   }
 
   async stop(): Promise<void> {
     this.ctl.abort();
+    await this.opts.coreApp?.stop();
     this.streamCtl?.abort();
     if (this.flushTimer) clearTimeout(this.flushTimer);
     if (this.retryTimer) clearTimeout(this.retryTimer);
@@ -192,6 +196,7 @@ export class OpenRigSource {
     if (this.feat.seat && this.feat.rig) await this.refreshNodes([...this.psIds()], signal);
     if (this.feat.attention) await this.refreshAttention(signal);
     if (this.feat.work) await this.refreshQueue(signal);
+    await this.opts.coreApp?.refresh(signal);
     this.markOnline();
     this.publish();
     // Only after the complete projection is in the store (same tick): every await above can still throw.
@@ -574,6 +579,11 @@ export class OpenRigSource {
       if (seat) put("seat", { ...seat, ...(isoOrUndefined(n.lastActivityAt) ? { __at: isoOrUndefined(n.lastActivityAt) } : {}) });
     }
     for (const a of attention) put("attention", a);
+    for (const a of this.opts.coreApp?.items() ?? []) {
+      const asker = (a["x-openrig.core-app"] as Json | undefined)?.asker;
+      const seatId = typeof asker === "string" ? seatIdOf(asker) : undefined;
+      put("attention", { ...a, ...(seatId ? { seatId } : {}) });
+    }
 
     if (this.feat.work) {
       const waiting = new Set(attention.map((a) => String(a.id).replace(/^queue(-update)?:/, "")));

@@ -86,3 +86,21 @@ it("keeps both line and event sizes unlimited when limits are omitted", async ()
   const payload = "x".repeat(5 * 1024 * 1024);
   expect((await all([`data: ${payload}\n\n`]))[0]!.data).toBe(payload);
 });
+
+
+it("stops buffered SSE dispatch when aborted and releases the stream reader", async () => {
+  let cancelled = false;
+  const ctl = new AbortController();
+  const stream = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode("data: one\n\ndata: two\n\n")); }, cancel() { cancelled = true; } });
+  const events = parseSSE(stream, { signal: ctl.signal });
+  expect((await events.next()).value?.data).toBe("one");
+  ctl.abort(); expect((await events.next()).done).toBe(true);
+  expect(cancelled).toBe(true); expect(stream.locked).toBe(false);
+});
+
+
+it("preserves non-abort reader errors with cancellation support available", async () => {
+  const stream = new ReadableStream<Uint8Array>({ start(c) { c.error(new Error("fixture source failed")); } });
+  await expect(parseSSE(stream, { signal: new AbortController().signal }).next()).rejects.toThrow("fixture source failed");
+  expect(stream.locked).toBe(false);
+});

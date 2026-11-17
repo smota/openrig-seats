@@ -65,3 +65,51 @@ the embedded fixture demo but has no `/gateway` adapter. See
 The minimal example adds `GATEWAY_PORT` and `PORT` for its own local listeners;
 see [its README](../examples/minimal/README.md). These are example settings, not
 gateway CLI environment variables.
+
+## Optional Core human-answer job
+
+This is a separate opt-in integration with `openrig.core-app` contract v1. Seat
+protocol `1.0` does not imply that the daemon supports this job. Older Core,
+unsupported contract versions, unavailable discovery or an actor outside the app's
+credential scope disable this job while legacy reads and ordinary sends retain
+their own capability checks. The compatibility pin records the exact reviewed Core app implementation validated by source re-extraction and isolated HTTP/SQLite whole-job fixtures. No release range or installed/native runtime compatibility is claimed.
+
+| Key | Default | Meaning / bounds |
+|---|---|---|
+| `coreApp.tokenFile` | Unset | Separate app bearer file, owner-only (`0600` or stricter), read server-side. Required when configuring the job. |
+| `coreApp.actor` | Unset | A registered person's address (`name@domain`), for example `alex@external`. Core's app actor list, not the address spelling, decides whether this person may be answered for. |
+| `coreApp.actions` | `false` | Enable question-bound answer actions only after successful discovery. |
+| `coreApp.idempotencyFile` | Unset | Required for actions; separate from ordinary send's table, one gateway per file. Stores binding hashes and request/actor IDs before POST, never answer bodies or Core receipts. |
+
+Provision the app credential through Core's existing owner write gate. A configured
+owner bearer is required; without one, Core's loopback or tailnet bind and Host/Origin
+rules govern access, including accepted tailnet peers. App credentials cannot act
+as owner credentials. Then transfer it into an app-owned secret file using exclusive create (`wx`, mode
+`0600`) inside an owner-only `0700` directory. Keep only that file path in gateway
+configuration. Do not use the operator or terminal bearer as the app credential,
+and never put the app credential in browser state, URLs or logs. Provisioning,
+rotation and revocation remain Core operator operations; this gateway does not
+administer credentials.
+
+Configuring the job opts into reading actual human questions and linked results,
+including their text, independently of the legacy `xOpenrig.includeText` switch.
+Discovery advertises `features["x-openrig.core-app.human-answer"]`; executable
+schemas are declared on individual attention items. With actions disabled, the
+questions are read-only. No credential is forwarded to the browser.
+
+Answer IDs are derived from the caller's stable idempotency key. Core owns
+submission bindings, conflicts, recovery and receipts. The gateway retains its
+small markers (hashes, request and actor, plus a terminal status once Core replied; never answer
+or receipt text). An unresolved marker is never dropped and stays retryable. A marker whose answer
+reached a terminal Core reply (completed or rejected) expires only under `act.retentionDays`; a file holding `act.maxKeys` unexpired markers
+refuses new answers (503) until some expire, as for ordinary sends. Lost credential or route (401/403/route 404) is never a
+rejection of a bound answer, even after the gateway saw a terminal reply (the browser may have lost it) or its marker expired:
+the same request and key stay retryable, and a different payload under that key is refused as key reuse. Core still owns permanent deduplication by answer ID, so a
+later retry of an expired key reaches Core's replay or conflict. Result reads follow only unresolved
+and still-retained markers. Do not delete or move the file during an unresolved submission.
+
+For Core answer forms only, the reference UI saves the action's original input and key in browser
+local storage before submitting, restores it when the form is recreated, and
+clears it on a terminal or acknowledged response without `retrySameRequest:true`. Network uncertainty and that neutral protocol hint retain the same submission for an explicit retry. The browser therefore holds the full Core answer payload, including typed
+answer text, until Core's terminal reply; it contains no app bearer, and the gateway's durable markers hold no question or answer text. Ordinary actions such as `send` never use browser storage and behave as before. API clients must likewise
+retain their original key and payload across retries. See [answer behavior](gateway.md).

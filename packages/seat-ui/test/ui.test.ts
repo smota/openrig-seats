@@ -14,7 +14,7 @@ function ui(capabilities = caps()) {
   const root = document.createElement("div"); document.body.append(root); roots.push(root);
   return { root, ui: new SeatUI(root, { capabilities, act: async (input) => ({ idempotencyKey: input.idempotencyKey!, status: "completed", replayed: false }) }) };
 }
-afterEach(() => { for (const root of roots.splice(0)) root.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { for (const root of roots.splice(0)) root.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
 
 describe("valid schema fixtures", () => {
   for (const kind of ["host", "rig", "seat", "turn", "attention", "work"]) {
@@ -235,4 +235,106 @@ it("replaces Ajv periodically so evicted nested schema IDs cannot accumulate", (
   expect(internals.ajv).not.toBe(original); expect(cache.size).toBe(2);
   const retained = cache.compile({ type: "object", properties: { value: { $id: "https://example.test/nested/301", type: "string" } } });
   expect(retained({ value: 1 })).toBe(false);
+});
+
+
+it("submits rendered Core binding unchanged and retries an uncertain answer with the original key", async () => {
+  const binding = { actor: "human-lee@external", requestId: "ask-1", questionId: "ship", episodeKey: null, expectedRevision: "dr1-rendered" };
+  const inputSchema = { type: "object", additionalProperties: false, required: [...Object.keys(binding), "optionId"], properties: { ...Object.fromEntries(Object.entries(binding).map(([key, value]) => [key, { const: value }])), optionId: { type: "string", enum: ["yes", "no"] } } };
+  const submit = vi.fn(async (_input: ActInput): Promise<unknown> => { throw new Error("receipt lost"); });
+  const form = createActionForm("attention", "core-app:ask-1", { id: "answer-option", label: "Answer", input: inputSchema }, submit);
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+  expect(submit.mock.calls[0]![0].input).toEqual({ ...binding, optionId: "yes" });
+  await vi.waitFor(() => expect(form.querySelector("button")!.disabled).toBe(false));
+  const resumed = createActionForm("attention", "core-app:ask-1", { id: "answer-option", label: "Answer", input: inputSchema }, submit);
+  resumed.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+  expect(submit.mock.calls[1]![0]).toEqual(submit.mock.calls[0]![0]);
+  expect(resumed.textContent).toContain("same submission");
+});
+
+
+it.each(["unsaved", "unknown", "incomplete"])("shows Core's %s persistence state while keeping the same submission retryable", async (state) => {
+  const submit = vi.fn(async (_input: ActInput) => ({ status: "accepted", retrySameRequest: true, result: { submission: { state } } }));
+  const form = createActionForm("attention", "core-app:ask-503", { id: "answer-option", label: "Answer" }, submit);
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(form.querySelector("button")!.disabled).toBe(false));
+  expect(form.textContent).toContain(`"state": "${state}"`);
+  expect(form.textContent).toContain("Retry same submission");
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+  expect(submit.mock.calls[1]![0]).toEqual(submit.mock.calls[0]![0]);
+});
+
+it("keeps ordinary actions off browser storage and unchanged: a new key per submission, none persisted", async () => {
+  const setItem = vi.spyOn(Storage.prototype, "setItem");
+  const submit = vi.fn(async (_input: ActInput) => ({ status: "accepted", retrySameRequest: true }));
+  const form = createActionForm("work", "w-retry", { id: "custom", label: "Run" }, submit);
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(form.querySelector("button")!.disabled).toBe(false));
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+  expect(submit.mock.calls[1]![0].idempotencyKey).not.toBe(submit.mock.calls[0]![0].idempotencyKey);
+  expect(form.textContent).not.toContain("Retry same submission");
+  const failing = vi.fn(async (_input: ActInput): Promise<unknown> => { throw new Error("lost"); });
+  const lost = createActionForm("seat", "s-lost", { id: "send", label: "Send" }, failing);
+  lost.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(lost.textContent).toContain("Submission failed"));
+  expect(setItem).not.toHaveBeenCalled(); expect(localStorage.length).toBe(0);
+  // A browser whose storage is unwritable can still use ordinary actions.
+  setItem.mockImplementation(() => { throw new Error("storage denied"); });
+  const sent = vi.fn(async (_input: ActInput) => ({ status: "completed" }));
+  const ok = createActionForm("seat", "s-ok", { id: "send", label: "Send" }, sent);
+  ok.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(1));
+  setItem.mockRestore();
+  const accepted = vi.fn(async (_input: ActInput) => ({ status: "accepted", result: { outcome: "retained" } }));
+  const send = createActionForm("seat", "s-retained", { id: "send", label: "Send" }, accepted);
+  send.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(send.querySelector("button")!.disabled).toBe(false));
+  send.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(accepted).toHaveBeenCalledTimes(2));
+  expect(accepted.mock.calls[1]![0].idempotencyKey).not.toBe(accepted.mock.calls[0]![0].idempotencyKey);
+});
+
+
+it.each(["receipt", "network"])("keeps exact Core answer recovery reachable after action disappearance and reload: %s", async (mode) => {
+  const root = document.createElement("div"); document.body.append(root); roots.push(root);
+  const capabilities = { ...caps(), features: { act: true } };
+  const submit = vi.fn(async (_input: ActInput) => ({ status: "accepted", retrySameRequest: true }));
+  if (mode === "network") submit.mockImplementation(async () => { throw new Error("receipt lost"); });
+  const action = { id: "answer-option", label: "Choose", input: { type: "object", required: ["revision", "value"], properties: { revision: { const: "rendered-r1" }, value: { type: "string", enum: ["yes", "no"] } } } };
+  const view = new SeatUI(root, { capabilities, act: submit });
+  view.snapshot({ cursor: "1", kinds: { attention: [{ id: "core-app:A", title: "Question", actions: [action] }] } });
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(root.querySelector("button")!.disabled).toBe(false));
+  const original = structuredClone(submit.mock.calls[0]![0]);
+  view.snapshot({ cursor: "2", kinds: { attention: [{ id: "core-app:A", title: "Recorded", actions: [] }] } });
+  expect(submit).toHaveBeenCalledTimes(1);
+  expect(root.textContent).toContain("Retry same submission");
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+  expect(submit.mock.calls[1]![0]).toEqual(original);
+  view.dispose();
+  const resumed = new SeatUI(root, { capabilities, act: submit });
+  resumed.snapshot({ cursor: "3", kinds: {} });
+  expect(submit).toHaveBeenCalledTimes(2);
+  expect(root.textContent).toContain("Retry same submission");
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(3));
+  expect(submit.mock.calls[2]![0]).toEqual(original);
+  await vi.waitFor(() => expect(root.querySelector("button")!.disabled).toBe(false));
+  submit.mockResolvedValue({ status: "completed", retrySameRequest: false });
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(4));
+  expect(submit.mock.calls[3]![0]).toEqual(original);
+  await vi.waitFor(() => expect(root.querySelector("button")!.disabled).toBe(true));
+  root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  expect(submit).toHaveBeenCalledTimes(4);
+  resumed.snapshot({ cursor: "4", kinds: {} });
+  expect(root.querySelector("form")).toBeNull();
+  expect(localStorage.length).toBe(0);
+  resumed.dispose();
 });

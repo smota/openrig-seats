@@ -1,7 +1,27 @@
 {
   "schema": "openrig-seats.conformance-snapshot/v1",
-  "openrigCommit": "f5b62726ff759a857eeb76e2cbd654493fedba2f",
+  "openrigCommit": "d2a1597d9055cd6471d7d9d15ba72d133da885e7",
   "surfaces": {
+    "coreApp": {
+      "contract": "openrig.core-app",
+      "version": 1,
+      "jobIds": [
+        "human-answer"
+      ],
+      "answerForms": [
+        "option",
+        "typed-reply"
+      ],
+      "actorAssurance": [
+        "app-attributed"
+      ],
+      "stableSubmissionIds": true,
+      "resultRead": true,
+      "independentHumanAuthentication": false,
+      "events": "invalidation-only",
+      "pollAfterMs": 5000,
+      "mounted": true
+    },
     "terminal": {
       "frameTypes": [
         "keys",
@@ -84,6 +104,7 @@
         "app GET /:qitemId",
         "app GET /:qitemId/transitions",
         "app GET /attention-aggregate",
+        "app GET /hosted-members",
         "app GET /human-updates",
         "app GET /inbox/list",
         "app GET /inbox/pending",
@@ -101,9 +122,11 @@
         "app POST /:qitemId/fallback",
         "app POST /:qitemId/handoff",
         "app POST /:qitemId/handoff-and-complete",
+        "app POST /:qitemId/tags",
         "app POST /:qitemId/unclaim",
         "app POST /:qitemId/update",
         "app POST /create",
+        "app POST /erase",
         "app POST /inbox/:inboxId/absorb",
         "app POST /inbox/:inboxId/deny",
         "app POST /inbox/drop",
@@ -125,6 +148,18 @@
       ],
       "terminal": [
         "app GET /api/terminal/:sessionName"
+      ],
+      "coreApp": [
+        "app DELETE /v1/credentials/:credentialId",
+        "app GET /v1/answers/:answerId",
+        "app GET /v1/capabilities",
+        "app GET /v1/events",
+        "app GET /v1/needs-me",
+        "app GET /v1/requests/:requestId",
+        "app GET /v1/requests/:requestId/result",
+        "app GET /v1/work/:qitemId",
+        "app POST /v1/answers/:answerId",
+        "app POST /v1/credentials"
       ]
     },
     "tokens": {
@@ -153,10 +188,12 @@
         "offset",
         "scroll",
         "text"
-      ]
+      ],
+      "coreApp": []
     },
     "transport": {
       "outcomes": [
+        "bridged",
         "delivered",
         "failed",
         "rendered-unconfirmed",
@@ -184,7 +221,6 @@
         "invalid_wait_for_idle": 400,
         "mid_work": 409,
         "override_input_present": 409,
-        "override_input_unknown": 409,
         "pane_in_mode": 409,
         "prompt_override_audit_unavailable": 500,
         "retained_quota_full": 409,
@@ -225,6 +261,9 @@
     },
     "rigEventTypes": [
       "agent.activity",
+      "agent.runner_map_lost",
+      "agent.runner_turn",
+      "agent.runner_turn_fenced",
       "agent.session_identity",
       "binding.updated",
       "bootstrap.completed",
@@ -250,11 +289,13 @@
       "mission_control.notification_sent",
       "node.added",
       "node.claimed",
+      "node.claude_auto_mode_changed",
       "node.codex_permissions_changed",
       "node.codex_profile_changed",
       "node.cwd_changed",
       "node.effort_changed",
       "node.held",
+      "node.input_route_changed",
       "node.launched",
       "node.model_changed",
       "node.permission_rules_changed",
@@ -285,6 +326,7 @@
       "proof.sources_changed",
       "qitem.closure_overdue",
       "qitem.fallback_routed",
+      "queue.answer_recorded",
       "queue.claimed",
       "queue.created",
       "queue.handed_off",
@@ -312,6 +354,7 @@
       "seat.restart_in_place_finished",
       "seat.restart_in_place_started",
       "seat.runtime_changed",
+      "seat.runtime_home_recorded",
       "session.cleaned",
       "session.detached",
       "session.discovered",
@@ -323,6 +366,13 @@
       "snapshot.created",
       "stream.emitted",
       "topology.roster_recorded",
+      "transport.delivery_evidence",
+      "transport.hook_bridge_armed",
+      "transport.hook_bridge_expired",
+      "transport.hook_bridge_fallback",
+      "transport.hook_bridge_uncertain",
+      "transport.hook_bridge_wake",
+      "transport.prompt_observation",
       "transport.prompt_override",
       "view.changed",
       "watchdog.evaluation_fired",
